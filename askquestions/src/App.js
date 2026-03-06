@@ -265,42 +265,6 @@ export default function App() {
     setEditQ(null); showToast("Updated!");
   };
   const deleteAiQ = async (id) => { await fbSet(`aiQuestions/${id}`, null); };
-
-  const generateAiQ = async () => {
-    setAiLoading(true); setAiError("");
-    const topRated = [...JEFF_QUESTIONS, ...customQuestions]
-      .filter(q => ratings[q.id]?.count > 0)
-      .sort((a, b) => (ratings[b.id].total / ratings[b.id].count) - (ratings[a.id].total / ratings[a.id].count))
-      .slice(0, 5).map(q => q.text);
-    const mostSkipped = [...JEFF_QUESTIONS, ...customQuestions]
-      .filter(q => (ratings[q.id]?.skips || 0) > 0)
-      .sort((a, b) => (ratings[b.id]?.skips || 0) - (ratings[a.id]?.skips || 0))
-      .slice(0, 3).map(q => q.text);
-    const prompt = `You are helping generate exactly 10 conversation starter questions for a dinner party game called "Ask Questions!" created in 1997. The game's philosophy: get to know the PERSON, not their résumé. Questions should reveal what people feel, think, believe — and why. Fun, surprising, occasionally thought-provoking, never offensive.
-${topRated.length ? `\nHighest-rated questions so far:\n${topRated.map((q, i) => `${i + 1}. ${q}`).join('\n')}` : ''}
-${mostSkipped.length ? `\nMost skipped (avoid similar):\n${mostSkipped.map((q, i) => `${i + 1}. ${q}`).join('\n')}` : ''}
-Generate exactly 10 NEW original questions. Diverse — some light and fun, some more reflective. Avoid politics, religion, sexuality.
-Return ONLY a JSON array, no markdown: [{"text": "question here", "hint": "optional hint or null"}]`;
-    try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1000, messages: [{ role: "user", content: prompt }] })
-      });
-      const data = await res.json();
-      const raw = data.content?.map(c => c.text || "").join("").trim().replace(/```json|```/g, "").trim();
-      const parsed = JSON.parse(raw);
-      // Clear old AI questions first
-      await fbSet("aiQuestions", null);
-      for (let i = 0; i < Math.min(parsed.length, 10); i++) {
-        const id = `ai_${Date.now()}_${i}`;
-        await fbSet(`aiQuestions/${id}`, { id, text: parsed[i].text, hint: parsed[i].hint || null, type: "ai", author: "Claude" });
-      }
-      showToast("10 AI questions generated!");
-    } catch { setAiError("Could not generate questions. Please try again."); }
-    setAiLoading(false);
-  };
-
-  // ── Derived ───────────────────────────────────────────────────────────────
   const currentQ = gameState?.currentQ;
   const questioner = gameState ? getPlayer(gameState.questioner) : null;
   const answerer = gameState ? getPlayer(gameState.answerer) : null;
