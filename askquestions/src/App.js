@@ -128,6 +128,11 @@ export default function App() {
   const [soloQ, setSoloQ] = useState(null);
   const [soloJustRated, setSoloJustRated] = useState(false);
   const [soloStarHover, setSoloStarHover] = useState(0);
+  // Suggest a question
+  const [showSuggest, setShowSuggest] = useState(false);
+  const [suggestText, setSuggestText] = useState("");
+  const [suggestName, setSuggestName] = useState("");
+  const [pendingSuggestions, setPendingSuggestions] = useState([]);
 
   const allQ = [...JEFF_QUESTIONS, ...BONUS_QUESTIONS, ...customQuestions];
 
@@ -144,6 +149,7 @@ export default function App() {
     listen("gameState", v => setGameState(v));
     listen("ratings", v => setRatings(v || {}));
     listen("customQuestions", v => setCustomQuestions(v ? Object.values(v) : []));
+    listen("pendingSuggestions", v => setPendingSuggestions(v ? Object.values(v).sort((a,b) => a.addedAt - b.addedAt) : []));
     listen("aboutText", v => { if (v) setAboutText(v); });
     listen("instructionsText", v => { if (v) setInstructionsText(v); });
 
@@ -205,6 +211,32 @@ export default function App() {
     setSoloJustRated(true);
   };
 
+  // ── Suggest a question ───────────────────────────────────────────────────
+  const submitSuggestion = async () => {
+    if (!suggestText.trim()) return;
+    const id = `sq_${Date.now()}`;
+    const q = {
+      id, text: suggestText.trim(),
+      hint: null,
+      author: suggestName.trim() || "Anonymous",
+      type: "community",
+      addedAt: Date.now(),
+      pending: true
+    };
+    await fbSet(`pendingSuggestions/${id}`, q);
+    await fbSet(`customQuestions/${id}`, q);
+    setSuggestText(""); setSuggestName(""); setShowSuggest(false);
+    showToast(`${q.author}'s question is up next!`);
+    // In solo mode, set it as the next question immediately
+    if (mode === "solo") {
+      setFlipping(true);
+      setTimeout(() => { setSoloQ(q); setSoloJustRated(false); setSoloStarHover(0); setFlipping(false); }, 280);
+    } else if (gameState) {
+      // In multiplayer, inject into gameState as next question
+      await fbSet("gameState", { ...gameState, nextQ: q });
+    }
+  };
+
   // ── Join multiplayer ──────────────────────────────────────────────────────
   const joinMulti = async () => {
     const name = nameInput.trim();
@@ -240,7 +272,7 @@ export default function App() {
     if (!gameState) return;
     setFlipping(true);
     setTimeout(async () => {
-      const q = pickWeighted(allQ, gameState.currentQ?.id, ratings);
+      const q = gameState.nextQ || pickWeighted(allQ, gameState.currentQ?.id, ratings);
       const newQuestioner = players.find(p => p.id === gameState.answerer) || players[0];
       let used = gameState.usedPlayerIds || [];
       const eligible = players.filter(p => p.id !== newQuestioner.id && !used.includes(p.id));
@@ -252,7 +284,8 @@ export default function App() {
         ...gameState, currentQ: q,
         questioner: newQuestioner.id, answerer: newAnswerer.id,
         round: (gameState.round || 1) + 1,
-        usedPlayerIds: [...used, newAnswerer.id]
+        usedPlayerIds: [...used, newAnswerer.id],
+        nextQ: null
       };
       await fbSet("gameState", gs);
       setJustRated(false); setStarHover(0); setFlipping(false);
@@ -491,6 +524,9 @@ export default function App() {
             {screen === "game" && isHost && (
               <button className="nav-btn warn" onClick={endGame}>End Game</button>
             )}
+            {(screen === "solo" || screen === "game") && (
+              <button className="nav-btn" style={{borderColor:"rgba(45,107,71,.4)",color:"#6abf8a"}} onClick={() => setShowSuggest(true)}>＋ Suggest a Question</button>
+            )}
             {(screen === "lobby" || screen === "solo") && (
               <button className="nav-btn warn" onClick={endGame}>Leave</button>
             )}
@@ -643,6 +679,29 @@ export default function App() {
             </div>
             {amQuestioner && <p style={{ textAlign: "center", fontSize: ".72rem", color: "var(--muted)", marginTop: ".9rem", fontStyle: "italic" }}>You're reading the question aloud. {answerer?.name} answers next.</p>}
             {amAnswerer && <p style={{ textAlign: "center", fontSize: ".72rem", color: "#e8a0b0", marginTop: ".9rem", fontStyle: "italic" }}>It's your turn to answer — then you become the Questioner.</p>}
+          </div>
+        )}
+
+        {/* SUGGEST A QUESTION MODAL */}
+        {showSuggest && (
+          <div className="overlay" onClick={e => e.target === e.currentTarget && setShowSuggest(false)}>
+            <div className="modal">
+              <button className="modal-close" onClick={() => setShowSuggest(false)}>✕</button>
+              <h2 className="modal-title">Suggest a Question</h2>
+              <p style={{fontSize:".8rem",color:"var(--muted)",marginBottom:"1.2rem",fontStyle:"italic"}}>Your question goes straight into the deck — up next, or close to it. Your name will appear as the source.</p>
+              <div style={{marginBottom:".8rem"}}>
+                <label className="form-lbl">Your Question *</label>
+                <textarea className="form-textarea" style={{minHeight:"80px"}} value={suggestText} onChange={e => setSuggestText(e.target.value)} placeholder="Ask something you've always wanted to know about people…" autoFocus />
+              </div>
+              <div style={{marginBottom:"1.1rem"}}>
+                <label className="form-lbl">Your Name</label>
+                <input className="form-input" value={suggestName} onChange={e => setSuggestName(e.target.value)} placeholder="e.g. Sarah" onKeyDown={e => e.key === "Enter" && submitSuggestion()} />
+              </div>
+              <div style={{display:"flex",gap:".7rem"}}>
+                <button className="btn-gold" style={{width:"auto"}} onClick={submitSuggestion} disabled={!suggestText.trim()}>Add to Deck →</button>
+                <button className="btn-ghost" onClick={() => setShowSuggest(false)}>Cancel</button>
+              </div>
+            </div>
           </div>
         )}
 
