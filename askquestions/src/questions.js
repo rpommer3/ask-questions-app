@@ -166,6 +166,165 @@ export const JEFF_QUESTIONS = [
   { id: 374, text: "Have you spoken at a funeral?", hint: null },
 ];
 
+// ── BONUS QUESTIONS ───────────────────────────────────────────────────────────
+// Curated additions in the spirit of Jeff's originals
+export const BONUS_QUESTIONS = [
+  { id: "b1", text: "What is something you believed with total certainty as a child that turned out to be completely wrong?", hint: null, type: "bonus" },
+  { id: "b2", text: "If you could have dinner with any three people — living or dead — who aren't famous, who would they be?", hint: "The 'no famous people' rule makes this one interesting." , type: "bonus" },
+  { id: "b3", text: "What is the most spontaneous thing you have ever done?", hint: null, type: "bonus" },
+  { id: "b4", text: "Finish this sentence: The older I get, the more I appreciate ___________.", hint: null, type: "bonus" },
+  { id: "b5", text: "What is one thing you do differently than almost everyone you know?", hint: null, type: "bonus" },
+  { id: "b6", text: "If your life had a theme song — the one that plays when you walk into a room — what would it be?", hint: null, type: "bonus" },
+  { id: "b7", text: "What is the most embarrassing thing that has ever happened to you in public?", hint: null, type: "bonus" },
+  { id: "b8", text: "What is something you have never told your parents but wish you could?", hint: "If your parents are present, feel free to skip this one.", type: "bonus" },
+  { id: "b9", text: "Would you rather know the date of your death, or the cause?", hint: null, type: "bonus" },
+  { id: "b10", text: "What job would you be terrible at, even with years of training?", hint: null, type: "bonus" },
+  { id: "b11", text: "Finish this sentence: The one thing I will never understand about people is ___________.", hint: null, type: "bonus" },
+  { id: "b12", text: "What is the nicest thing a stranger has ever done for you?", hint: null, type: "bonus" },
+  { id: "b13", text: "If you could go back and relive one ordinary day — nothing special, just a regular day — which would it be and why?", hint: null, type: "bonus" },
+  { id: "b14", text: "What habit did you pick up from your parents that you swore you never would?", hint: null, type: "bonus" },
+  { id: "b15", text: "What is something you are surprisingly bad at given how long you've been doing it?", hint: null, type: "bonus" },
+  { id: "b16", text: "If you had to eat at the same restaurant every week for a year, which would it be?", hint: null, type: "bonus" },
+  { id: "b17", text: "What is the most useful thing you know how to do that most people don't?", hint: null, type: "bonus" },
+  { id: "b18", text: "Finish this sentence: The version of me from ten years ago would be surprised that I now ___________.", hint: null, type: "bonus" },
+  { id: "b19", text: "What would you do with a completely free, unscheduled Saturday — no obligations, no one else's needs?", hint: null, type: "bonus" },
+  { id: "b20", text: "What is something you have strong opinions about that most people don't care about at all?", hint: null, type: "bonus" },
+  { id: "b21", text: "If you had to describe your childhood in three words, what would they be?", hint: null, type: "bonus" },
+  { id: "b22", text: "What is the worst advice you have ever followed?", hint: null, type: "bonus" },
+  { id: "b23", text: "What is something you own that has no practical value but that you would never get rid of?", hint: null, type: "bonus" },
+  { id: "b24", text: "Would you rather be known as the funniest person in the room, or the smartest?", hint: null, type: "bonus" },
+  { id: "b25", text: "What is the most trouble you ever got into that your parents never found out about?", hint: null, type: "bonus" },
+];
+
+export const DEFAULT_ABOUT = `These questions were written starting in 1997 by someone who got tired of small talk at dinner parties — the endless "where do you live, what do you do" loop that always ended in uncomfortable silence.
+
+The idea is simple: get to know the person, not their résumé. Find out what they feel, think, believe — and why.
+
+Two rules:
+
+Be sincere. Treat this as a real conversation, not a game show. You may be entertained, but don't miss out on a lifelong connection.
+
+Be impartial. Your job is to learn about the other person, not to judge their answers. Whatever the answer to whatever the question — it isn't a wrong answer. The antidote to judgment? Curiosity.
+
+Hit Skip if a question feels wrong for the moment — no explanation needed. Rate questions to surface the best ones over time.`;
+
+export const DEFAULT_INSTRUCTIONS = `How to Play
+
+The Questioner reads the question aloud to the group. One person is selected to answer — that person becomes the next Questioner.
+
+Multiplayer Mode (2–15 players)
+Everyone joins with their name. The app randomly selects who answers each round, making sure everyone gets a turn before anyone goes twice. The person who answers becomes the Questioner for the next round.
+
+Solo Mode
+Just you and the questions. Use it to browse, reflect, or prep great conversation starters before your next gathering. Hit Next to move through questions at your own pace.
+
+A few tips from the creator:
+— Make it light-hearted. You don't have to present this as a "game." Just say: "I heard a weird question the other day — curious how you'd answer it."
+— Don't rush. The questions are just conversation starters, not a quiz.
+— Skip freely. If a question feels wrong for the room, skip it. No explanation needed.
+— Be impartial. Don't react to answers — be curious about them instead.
+— The best questions often lead somewhere unexpected. Follow the conversation, not the app.`;  { id: 123, text: "Of all the people you know, who would best survive if dropped on a deserted island?", hint: null },
+  { id: 127, text: "Do you think man has been on the moon?", hint: null },
+  { id: 130, text: "If you had to live in a foreign country for 5 years, which would you choose? You cannot leave the entire time.", hint: "Your job, housing, and schooling would all be equivalent to your current situation." },
+  { id: 131, text: "Did Michael Jackson do it? (Define 'it' however you wish.)", hint: null },
+  { id: 132, text: "Finish this sentence: The one occupation that is just underpaid in this country is ___________.", hint: null },
+  { id: 134, text: "What was the last thing you read or heard in the news that upset you?", hint: null },
+  { id: 135, text: "Who is the most famous person you've ever had a relationship with?", hint: null },
+  { id: 137, text: "Do you know anyone currently serving time? Have you ever spent a night in jail?", hint: null },
+  { id: 138, text: "Do you know anyone who is doing exactly what they want to do with their life? Do you want to kill that person?", hint: null },
+  { id: 140, text: "Who is the most famous or successful person who graduated from your high school class?", hint: "Did you think they'd be that successful? Do you wish they got a tax audit?" },
+  { id: 141, text: "Do you consider yourself a jealous person?", hint: null },
+  { id: 142, text: "Who is the most annoying person you know and why?", hint: "First name only is fine. If you're having dinner with that person, use an alias." },
+  { id: 144, text: "Is there anyone whom you used to speak with every day (for at least a year) who you haven't spoken with in several years?", hint: "I thought so." },
+  { id: 146, text: "What is the closest to death you have ever been?", hint: null },
+  { id: 147, text: "If you could change one law, what would it be? Would your answer change if it became publicly known?", hint: null },
+  { id: 150, text: "If you could only eat one meal for a month (as much and as often as you wanted), what would it be?", hint: "If you say something with variety, be specific — not just 'pizza,' but which kind." },
+  { id: 154, text: "What is the name of your 3rd-grade teacher? What were they like?", hint: null },
+  { id: 155, text: "What is your first memory?", hint: null },
+  { id: 156, text: "What is the first time you remember your parents being proud of you?", hint: "If this still has not occurred, you may want to write Dear Abby." },
+  { id: 159, text: "For what reason were you grounded for the first time?", hint: null },
+  { id: 160, text: "What is the most pain you have ever been in?", hint: null },
+  { id: 161, text: "What is the biggest fear you have for your children, or for children in general?", hint: null },
+  { id: 164, text: "Who was President when you were born?", hint: null },
+  { id: 167, text: "Have you ever been mugged?", hint: null },
+  { id: 168, text: "Women: How many times have you been formally proposed to? Men: How many times have you formally proposed?", hint: "This can be a touchy subject, so tread carefully." },
+  { id: 170, text: "A neighbor asks you to watch their dog. You never hear from them and they return a year later wanting the dog back. Do you give it back?", hint: "You and your family have grown very fond of the dog." },
+  { id: 174, text: "What is the greatest favor or act of kindness you have ever done for someone?", hint: "It needs to be specific." },
+  { id: 176, text: "What is your most memorable family vacation?", hint: null },
+  { id: 178, text: "What is your favorite dessert?", hint: null },
+  { id: 182, text: "Did you ever cheat on a test? Did you ever get caught?", hint: null },
+  { id: 186, text: "If you could only drink one type of drink for a month (in addition to water), what would it be?", hint: "Be specific — if wine, what kind?" },
+  { id: 188, text: "When were you in the best shape of your life? What could you do that makes you believe that was your peak?", hint: null },
+  { id: 191, text: "What was your first purchase over $1,000?", hint: null },
+  { id: 200, text: "What books have you read more than once?", hint: null },
+  { id: 203, text: "What nicknames have you had in your life?", hint: null },
+  { id: 206, text: "Have you ever witnessed a crime? Did you report it?", hint: null },
+  { id: 207, text: "Have you ever been in a fight where punches were thrown?", hint: null },
+  { id: 208, text: "What city did you live in when you were 5, 19, and 25?", hint: "This one often creates surprising connections between people at the table." },
+  { id: 209, text: "Have you ever saved anyone's life?", hint: null },
+  { id: 210, text: "What TV character can you most identify with?", hint: null },
+  { id: 224, text: "What is your greatest athletic feat?", hint: null },
+  { id: 225, text: "Why do you live where you live?", hint: null },
+  { id: 226, text: "What is the first movie you ever saw in a movie theatre?", hint: null },
+  { id: 229, text: "Have you ever fired anyone? Have you ever been fired?", hint: null },
+  { id: 232, text: "In high school, what three adjectives described you? In college? Today?", hint: null },
+  { id: 235, text: "Who has been the most influential person in your life, ever? Today?", hint: null },
+  { id: 238, text: "Who is your favorite entertainer?", hint: null },
+  { id: 242, text: "What is the biggest difference between who you are today and who you were half your years ago?", hint: null },
+  { id: 243, text: "What is your greatest fear?", hint: null },
+  { id: 246, text: "What is your favorite movie line?", hint: null },
+  { id: 247, text: "How many very close friends do you have?", hint: null },
+  { id: 249, text: "If you could give $1,000,000 to a single charity, which would it be?", hint: null },
+  { id: 254, text: "What do you think is the worst invention of the past 25 years? What is the best?", hint: null },
+  { id: 259, text: "Is there anyone you almost married?", hint: null },
+  { id: 261, text: "Have you ever had a religious experience?", hint: null },
+  { id: 264, text: "Have you ever called into work 'sick' when you weren't?", hint: null },
+  { id: 270, text: "Have you ever won a contest?", hint: null },
+  { id: 275, text: "What is something that is currently legal that you think should be illegal?", hint: null },
+  { id: 277, text: "If you had to change your first name to something else, what would it be?", hint: null },
+  { id: 279, text: "What person, place, or thing is at the center of your life?", hint: null },
+  { id: 284, text: "Do you have any superstitions?", hint: null },
+  { id: 287, text: "Finish this sentence: There are very few people who are better than me at ___________.", hint: null },
+  { id: 289, text: "Finish this sentence: Sundays are for ___________.", hint: null },
+  { id: 292, text: "Why did your parents name you the name you have?", hint: null },
+  { id: 293, text: "What is your family heritage?", hint: null },
+  { id: 296, text: "Have you ever been asked to leave a public place? Why?", hint: null },
+  { id: 306, text: "If you could have an amazing singing voice or be amazing at an instrument, which would you choose?", hint: null },
+  { id: 308, text: "What is the scariest, most daring thing you've ever done?", hint: null },
+  { id: 311, text: "What's your favorite TV show of all time?", hint: null },
+  { id: 312, text: "What's the dumbest thing you've ever done?", hint: null },
+  { id: 314, text: "To what brand are you stupidly loyal?", hint: null },
+  { id: 316, text: "No one else is around. What do you gorge on?", hint: null },
+  { id: 320, text: "Wave a magic wand and move this gathering to anyplace in the world where you have been. Where are we now?", hint: null },
+  { id: 322, text: "If money is not an object: where do you want to retire?", hint: null },
+  { id: 324, text: "What's the worst job you've ever held?", hint: null },
+  { id: 325, text: "What are your THREE most prized possessions?", hint: null },
+  { id: 327, text: "How would you design a spice rack for a blind person?", hint: null },
+  { id: 329, text: "What do you think happens to a person after they die?", hint: null },
+  { id: 330, text: "You just got kicked out of the United States. Where would you go?", hint: null },
+  { id: 331, text: "What is the longest grudge you've ever held? Over what?", hint: null },
+  { id: 334, text: "What is your least favorite personal hygiene task?", hint: null },
+  { id: 337, text: "Have you read a book that you feel changed your life?", hint: null },
+  { id: 340, text: "What is your favorite thing to do for another person?", hint: null },
+  { id: 342, text: "What is the most generous act of kindness anyone has ever done for you?", hint: null },
+  { id: 343, text: "What's the family tradition that you will NEVER give up?", hint: null },
+  { id: 345, text: "Choose one dinner: Dinner at The Vatican, Buckingham Palace, or The White House?", hint: "Current or previous occupant of your choosing." },
+  { id: 348, text: "If someone wrote a biography about you, what do you think the title should be?", hint: null },
+  { id: 350, text: "You can have one hour each with FIVE people who are now dead. Who are they?", hint: "People you knew or didn't know — either one." },
+  { id: 354, text: "Who is the most famous person you have ever met?", hint: null },
+  { id: 356, text: "What one song would you love to have played at your funeral... but probably won't?", hint: null },
+  { id: 357, text: "What is the one food item you try really hard not to run out of at home?", hint: null },
+  { id: 359, text: "Finish this sentence: I might just be the smartest person in the room when it comes to:", hint: null },
+  { id: 362, text: "Pick one: Do you prefer getting up early or staying up late?", hint: null },
+  { id: 364, text: "Name a friend with whom you've lost touch — and you'd like to reunite.", hint: null },
+  { id: 365, text: "Do you think a hotdog is a sandwich?", hint: null },
+  { id: 366, text: "What is your favorite thing to do on a Sunday afternoon?", hint: null },
+  { id: 367, text: "Have you ever been kicked out of a bar or restaurant?", hint: null },
+  { id: 370, text: "Do you have an all-time favorite actor? Performer?", hint: null },
+  { id: 372, text: "Have you ever had a terrible roommate?", hint: null },
+  { id: 374, text: "Have you spoken at a funeral?", hint: null },
+];
+
 export const DEFAULT_ABOUT = `These questions were written starting in 1997 by someone who got tired of small talk at dinner parties — the endless "where do you live, what do you do" loop that always ended in uncomfortable silence.
 
 The idea is simple: get to know the person, not their résumé. Find out what they feel, think, believe — and why.
