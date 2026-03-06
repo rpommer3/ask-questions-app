@@ -960,7 +960,7 @@ export default function App() {
     await fbSet(`customQuestions/${editQ.id}`, editQ);
     setEditQ(null); showToast("Updated!");
   };
-  const deleteAiQ = async (id) => { await fbSet(`aiQuestions/${id}`, null); };
+  
 
   
 
