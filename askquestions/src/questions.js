@@ -223,8 +223,9 @@ A few tips from the creator:
 — Don't rush. The questions are just conversation starters, not a quiz.
 — Skip freely. If a question feels wrong for the room, skip it. No explanation needed.
 — Be impartial. Don't react to answers — be curious about them instead.
-— The best questions often lead somewhere unexpected. Follow the conversation, not the app.`;  { id: 123, text: "Of all the people you know, who would best survive if dropped on a deserted island?", hint: null },
-  { id: 127, text: "Do you think man has been on the moon?", hint: null },
+— The best questions often lead somewhere unexpected. Follow the conversation, not the app.`;
+
+export const JEFF_QUESTIONS = [  { id: 127, text: "Do you think man has been on the moon?", hint: null },
   { id: 130, text: "If you had to live in a foreign country for 5 years, which would you choose? You cannot leave the entire time.", hint: "Your job, housing, and schooling would all be equivalent to your current situation." },
   { id: 131, text: "Did Michael Jackson do it? (Define 'it' however you wish.)", hint: null },
   { id: 132, text: "Finish this sentence: The one occupation that is just underpaid in this country is ___________.", hint: null },
