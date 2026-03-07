@@ -167,7 +167,24 @@ export default function App() {
     return () => unsubs.forEach(u => u());
   }, []);
 
-  // Rejoin multiplayer if was in session
+  // Heartbeat — update lastActive every 60s so stale players can be detected
+  useEffect(() => {
+    if (mode !== "multi") return;
+    const interval = setInterval(async () => {
+      await fbSet(`players/${myId}/lastActive`, Date.now());
+    }, 60000);
+    return () => clearInterval(interval);
+  }, [mode, myId]);
+
+  // Auto-remove players inactive for more than 2 hours
+  useEffect(() => {
+    if (!isHost || players.length === 0) return;
+    const TWO_HOURS = 2 * 60 * 60 * 1000;
+    const stale = players.filter(p => p.id !== myId && p.lastActive && Date.now() - p.lastActive > TWO_HOURS);
+    stale.forEach(p => fbSet(`players/${p.id}`, null));
+  }, [players, isHost, myId]);
+
+  // ── Rejoin multiplayer if was in session
   useEffect(() => {
     if (!loaded) return;
     const savedName = localStorage.getItem("aq_myname");
@@ -250,7 +267,7 @@ export default function App() {
       setScreen(gs ? "game" : "lobby"); return;
     }
     if (list.length >= 15) { setJoinError("Game is full (15 players max)."); return; }
-    const player = { id: myId, name, joinedAt: Date.now() };
+    const player = { id: myId, name, joinedAt: Date.now(), lastActive: Date.now() };
     await fbSet(`players/${myId}`, player);
     localStorage.setItem("aq_myname", name); localStorage.setItem("aq_mode", "multi");
     setMyName(name); setMode("multi"); setScreen("lobby");
@@ -312,6 +329,11 @@ export default function App() {
     await fbSet(`players/${myId}`, null);
     localStorage.removeItem("aq_mode"); localStorage.removeItem("aq_myname");
     setMyName(""); setNameInput(""); setMode(null); setScreen("home");
+  };
+
+  const kickPlayer = async (playerId) => {
+    await fbSet(`players/${playerId}`, null);
+    showToast("Player removed.");
   };
 
   // ── Admin ─────────────────────────────────────────────────────────────────
@@ -605,8 +627,13 @@ export default function App() {
               <p className="p-count">{players.length} / 15 joined</p>
               <div className="player-list">
                 {players.map(p => (
-                  <div key={p.id} className={`p-chip ${p.id === myId ? "me" : ""}`}>
-                    {p.name}{p.id === myId ? " (you)" : ""}
+                  <div key={p.id} style={{display:"flex",alignItems:"center",gap:".4rem"}}>
+                    <div className={`p-chip ${p.id === myId ? "me" : ""}`}>
+                      {p.name}{p.id === myId ? " (you)" : ""}
+                    </div>
+                    {isHost && p.id !== myId && (
+                      <button className="icon-btn del" style={{fontSize:".6rem",padding:".15rem .4rem"}} onClick={() => kickPlayer(p.id)} title="Remove player">✕</button>
+                    )}
                   </div>
                 ))}
               </div>
@@ -626,8 +653,13 @@ export default function App() {
           <div className="game-wrap">
             <div className="ticker">
               {players.map(p => (
-                <div key={p.id} className={`t-chip ${p.id === gameState.questioner ? "q" : p.id === gameState.answerer ? "a" : ""}`}>
-                  {p.name}{p.id === myId ? " ✦" : ""}
+                <div key={p.id} style={{display:"inline-flex",alignItems:"center",gap:".2rem"}}>
+                  <div className={`t-chip ${p.id === gameState.questioner ? "q" : p.id === gameState.answerer ? "a" : ""}`}>
+                    {p.name}{p.id === myId ? " ✦" : ""}
+                  </div>
+                  {isHost && p.id !== myId && (
+                    <button className="icon-btn del" style={{fontSize:".55rem",padding:".1rem .3rem",borderRadius:"50%"}} onClick={() => kickPlayer(p.id)} title="Remove">✕</button>
+                  )}
                 </div>
               ))}
             </div>
