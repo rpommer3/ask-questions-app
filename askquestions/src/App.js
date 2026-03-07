@@ -167,6 +167,8 @@ export default function App() {
     return () => unsubs.forEach(u => u());
   }, []);
 
+  const isHost = players.length > 0 && players[0].id === myId;
+
   // Heartbeat — update lastActive every 60s so stale players can be detected
   useEffect(() => {
     if (mode !== "multi") return;
@@ -198,7 +200,6 @@ export default function App() {
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(""), 2800); };
   const getAvgRating = (id) => { const r = ratings[id]; if (!r || !r.count) return null; return (r.total / r.count).toFixed(1); };
   const getPlayer = (id) => players.find(p => p.id === id);
-  const isHost = players.length > 0 && players[0].id === myId;
 
   // ── Solo ─────────────────────────────────────────────────────────────────
   const startSolo = () => {
