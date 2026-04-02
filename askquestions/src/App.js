@@ -50,6 +50,11 @@ function pickWeighted(arr, excludeId, ratings) {
   return candidates[candidates.length - 1];
 }
 
+// Find a question by ID across all question arrays
+function findById(allQ, id) {
+  return allQ.find(q => String(q.id) === String(id)) || null;
+}
+
 // Keep pickRandom as a fallback for when ratings aren't loaded yet
 function pickRandom(arr, excludeId) {
   if (!arr.length) return null;
@@ -211,7 +216,11 @@ export default function App() {
 
   const soloNext = () => {
     setFlipping(true);
-    setTimeout(() => { setSoloQ(pickWeighted(allQ, soloQ?.id, ratings)); setSoloJustRated(false); setSoloStarHover(0); setFlipping(false); }, 280);
+    setTimeout(() => {
+      const next = soloQ?.followUp ? findById(allQ, soloQ.followUp) : null;
+      setSoloQ(next || pickWeighted(allQ, soloQ?.id, ratings));
+      setSoloJustRated(false); setSoloStarHover(0); setFlipping(false);
+    }, 280);
   };
 
   const soloSkip = async () => {
@@ -290,7 +299,8 @@ export default function App() {
     if (!gameState) return;
     setFlipping(true);
     setTimeout(async () => {
-      const q = gameState.nextQ || pickWeighted(allQ, gameState.currentQ?.id, ratings);
+      const followUp = gameState.currentQ?.followUp ? findById(allQ, gameState.currentQ.followUp) : null;
+      const q = gameState.nextQ || followUp || pickWeighted(allQ, gameState.currentQ?.id, ratings);
       const newQuestioner = players.find(p => p.id === gameState.answerer) || players[0];
       let used = gameState.usedPlayerIds || [];
       const eligible = players.filter(p => p.id !== newQuestioner.id && !used.includes(p.id));
@@ -593,7 +603,7 @@ export default function App() {
               <span className="q-num">#{soloQ.id}</span>
               <div className="q-source">
                 <div className={`q-dot ${soloQ.type === "ai" ? "ai" : soloQ.type === "community" ? "comm" : ""}`} />
-                <span className="q-src-lbl">{soloQ.type === "ai" ? "AI Generated" : soloQ.author ? `Added by ${soloQ.author}` : "Jeff's Original"}</span>
+                <span className="q-src-lbl">{soloQ.type === "ai" ? "AI Generated" : soloQ.author ? `Added by ${soloQ.author}` : "Jeff's Original"}{soloQ.followUp ? " · Part 1 of 2" : ""}</span>
               </div>
               <p className="q-text">{soloQ.text}</p>
               {soloQ.hint && <div className="q-hint">💡 {soloQ.hint}</div>}
@@ -685,7 +695,7 @@ export default function App() {
                 <span className="q-num">#{currentQ.id}</span>
                 <div className="q-source">
                   <div className={`q-dot ${currentQ.type === "ai" ? "ai" : currentQ.type === "community" ? "comm" : ""}`} />
-                  <span className="q-src-lbl">{currentQ.type === "ai" ? "AI Generated" : currentQ.author ? `Added by ${currentQ.author}` : "Jeff's Original"}</span>
+                  <span className="q-src-lbl">{currentQ.type === "ai" ? "AI Generated" : currentQ.author ? `Added by ${currentQ.author}` : "Jeff's Original"}{currentQ.followUp ? " · Part 1 of 2" : ""}</span>
                 </div>
                 <p className="q-text">{currentQ.text}</p>
                 {currentQ.hint && <div className="q-hint">💡 {currentQ.hint}</div>}
