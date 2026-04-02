@@ -883,8 +883,21 @@ export default function App() {
                     <p className="sec-title">Game Management</p>
                     <p style={{ fontSize: ".75rem", color: "var(--muted)", marginBottom: ".7rem", fontStyle: "italic" }}>Use at end of the night to reset for next time.</p>
                     <div style={{ display: "flex", gap: ".6rem", flexWrap: "wrap" }}>
-                      <button className="btn-ghost btn-sm" onClick={async () => { await fbSet("players", null); await fbSet("gameState", null); showToast("Players cleared."); }}>Clear All Players</button>
-                      <button className="btn-ghost btn-sm" onClick={async () => { await fbSet("ratings", null); showToast("Ratings cleared."); }}>Clear All Ratings</button>
+                      <button className="btn-ghost btn-sm" onClick={() => {
+                        if (window.confirm("Are you sure you want to remove ALL players? This cannot be undone.")) {
+                          fbSet("players", null); fbSet("gameState", null); showToast("Players cleared.");
+                        }
+                      }}>Clear All Players</button>
+                      <button className="btn-ghost btn-sm" onClick={() => {
+                        if (window.confirm("Are you sure you want to delete ALL ratings? This cannot be undone.")) {
+                          fbSet("ratings", null); showToast("Ratings cleared.");
+                        }
+                      }}>Clear All Ratings</button>
+                      <button className="btn-ghost btn-sm" onClick={() => {
+                        if (window.confirm("Are you sure you want to delete ALL community questions? This cannot be undone.")) {
+                          fbSet("customQuestions", null); fbSet("pendingSuggestions", null); showToast("Community questions cleared.");
+                        }
+                      }}>Clear Community Questions</button>
                     </div>
                   </div>
                 )}
