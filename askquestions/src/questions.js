@@ -425,7 +425,7 @@ Multiplayer Mode (2–15 players)
 Everyone joins with their name. The app randomly selects who answers each round, making sure everyone gets a turn before anyone goes twice. The person who answers becomes the Questioner for the next round.
 
 Solo Mode
-Just you and the questions. Use it to browse, reflect, or prep great conversation starters before your next gathering. Hit Next to move through questions at your own pace.
+Just one person asks the questions to the group. The questioner sets the pace and has discretion to skip.
 
 A few tips from the creator:
 — Make it light-hearted. You don't have to present this as a "game." Just say: "I heard a weird question the other day — curious how you'd answer it."
