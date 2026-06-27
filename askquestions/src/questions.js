@@ -433,3 +433,22 @@ A few tips from the creator:
 — Skip freely. If a question feels wrong for the room, skip it. No explanation needed.
 — Be impartial. Don't react to answers — be curious about them instead.
 — The best questions often lead somewhere unexpected. Follow the conversation, not the app.`;
+
+// ── BEAR CAMP ────────────────────────────────────────────────────────────────
+// Preloaded questions for the 60th-birthday camping trip. These always live in
+// the Bear Camp deck; group-added questions (from Firebase "bearCampQuestions")
+// are merged in on top of these at runtime.
+export const BEAR_CAMP_SEED = [
+  { id: "bc1", text: "Recite your lower school Prize Day poem. Winner is the one who can recite the most.", hint: null, type: "bearcamp", author: "Bob" },
+  { id: "bc2", text: "Recite John Goebel's prize-winning Prize Day poem. (Excluding John — winner is whoever recites the most.)", hint: null, type: "bearcamp", author: "Bob" },
+  { id: "bc3", text: "How did it make you feel when one of your best friends refused to room with you in Vancouver because of your snoring?", hint: null, type: "bearcamp", author: "Bob" },
+  { id: "bc4", text: "Who snores the loudest?", hint: null, type: "bearcamp", author: "Bob" },
+  { id: "bc5", text: "Who among us has competed in the most high school state championship tournaments (team and individual)? Who has won the most State titles?", hint: null, type: "bearcamp", author: "Bob" },
+  { id: "bc6", text: "Should Bob Pommer be in the CDS golf hall of fame?", hint: null, type: "bearcamp", author: "Bob" },
+  { id: "bc7", text: "Identify the most unlikely teacher who had the greatest impact on you — and why?", hint: null, type: "bearcamp", author: "Bob" },
+  { id: "bc8", text: "What's the dumbest thing you did at Country Day that you got caught for? What's the dumbest thing you did at Country Day that you didn't get caught for?", hint: null, type: "bearcamp", author: "Bob" },
+  { id: "bc9", text: "List as many of the automobiles driven by each monger in high school.", hint: null, type: "bearcamp", author: "Bob" },
+  { id: "bc10", text: "Identify a streaming series (Netflix, Hulu, HBO, etc.) that Jim Breckenridge has watched more than once. Suggest where he should start.", hint: null, type: "bearcamp", author: "Bob" },
+  { id: "bc11", text: "Which monger has the oldest email address — and what is it?", hint: null, type: "bearcamp", author: "Bob" },
+  { id: "bc12", text: "How much money have we invested in the syndicate anyway?", hint: null, type: "bearcamp", author: "Bob" },
+];
