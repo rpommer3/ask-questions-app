@@ -435,6 +435,7 @@ export default function App() {
   const answerer = gameState ? getPlayer(gameState.answerer) : null;
   const amQuestioner = gameState?.questioner === myId;
   const amAnswerer = gameState?.answerer === myId;
+  const inBearMode = soloBear || gameState?.bearCamp === true;
   const currentRating = currentQ ? getAvgRating(currentQ.id) : null;
   const currentRatingCount = currentQ ? (ratings[currentQ.id]?.count || 0) : 0;
   const soloRating = soloQ ? getAvgRating(soloQ.id) : null;
@@ -608,7 +609,9 @@ export default function App() {
           <div className="hdr-nav">
             <button className="nav-btn" onClick={() => setShowInstructions(true)}>How to Play</button>
             <button className="nav-btn" onClick={() => setShowAbout(true)}>About</button>
-            <button className="nav-btn" style={{borderColor:"rgba(200,119,46,.5)",color:"#cf9a5c"}} onClick={() => setShowBearCamp(true)}>Bear Camp</button>
+            {(screen === "home" || screen === "lobby") && (
+              <button className="nav-btn" style={{borderColor:"rgba(200,119,46,.5)",color:"#cf9a5c"}} onClick={() => setShowBearCamp(true)}>Bear Camp</button>
+            )}
             {(screen === "lobby" || screen === "game" || screen === "solo") && (
               <button className="nav-btn" onClick={() => { setShowAdmin(true); setAdminAuthed(false); setAdminPw(""); setAdminError(""); }}>Admin</button>
             )}
@@ -616,7 +619,11 @@ export default function App() {
               <button className="nav-btn warn" onClick={endGame}>End Game</button>
             )}
             {(screen === "solo" || screen === "game") && (
-              <button className="nav-btn" style={{borderColor:"rgba(45,107,71,.4)",color:"#6abf8a"}} onClick={() => setShowSuggest(true)}>＋ Suggest a Question</button>
+              inBearMode ? (
+                <button className="nav-btn" style={{borderColor:"rgba(200,119,46,.5)",color:"#cf9a5c"}} onClick={() => setShowBearCamp(true)}>＋ Suggest a Bear Camp Question</button>
+              ) : (
+                <button className="nav-btn" style={{borderColor:"rgba(45,107,71,.4)",color:"#6abf8a"}} onClick={() => setShowSuggest(true)}>＋ Suggest a Question</button>
+              )
             )}
             {(screen === "lobby" || screen === "solo") && (
               <button className="nav-btn warn" onClick={endGame}>Leave</button>
