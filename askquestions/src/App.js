@@ -1,1042 +1,454 @@
-import { useState, useEffect, useCallback, useRef } from "react";
-import { ref, onValue, set, get } from "firebase/database";
-import { db } from "./firebase";
-import { JEFF_QUESTIONS, BONUS_QUESTIONS, BEAR_CAMP_SEED, DEFAULT_ABOUT, DEFAULT_INSTRUCTIONS } from "./questions";
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-// Weight calculation: high ratings → more likely, low ratings + skips → less likely
-// New/unrated questions get a neutral weight of 1.0
-function getWeight(qId, ratings) {
-  const r = ratings[qId];
-  if (!r) return 1.0;
-  const skips = r.skips || 0;
-  const count = r.count || 0;
-  const avg = count > 0 ? r.total / count : null;
-
-  let weight = 1.0;
-
-  // Rating effect: 5★ → 2.5x, 4★ → 1.8x, 3★ → 1.0x, 2★ → 0.5x, 1★ → 0.2x
-  if (avg !== null) {
-    if (avg >= 4.5) weight *= 2.5;
-    else if (avg >= 3.5) weight *= 1.8;
-    else if (avg >= 2.5) weight *= 1.0;
-    else if (avg >= 1.5) weight *= 0.5;
-    else weight *= 0.2;
-  }
-
-  // Skip penalty: each skip reduces weight, but never below 0.05
-  if (skips > 0) {
-    const skipPenalty = Math.pow(0.85, skips); // -15% per skip, compounding
-    weight *= skipPenalty;
-  }
-
-  return Math.max(weight, 0.05); // floor at 5% so nothing disappears entirely
-}
-
-function pickWeighted(arr, excludeId, ratings) {
-  if (!arr.length) return null;
-  const candidates = arr.filter(q => q.id !== excludeId);
-  if (!candidates.length) return arr[0];
-
-  const weights = candidates.map(q => getWeight(q.id, ratings));
-  const total = weights.reduce((a, b) => a + b, 0);
-  let rand = Math.random() * total;
-
-  for (let i = 0; i < candidates.length; i++) {
-    rand -= weights[i];
-    if (rand <= 0) return candidates[i];
-  }
-  return candidates[candidates.length - 1];
-}
-
-// Find a question by ID across all question arrays
-function findById(allQ, id) {
-  return allQ.find(q => String(q.id) === String(id)) || null;
-}
-
-// Keep pickRandom as a fallback for when ratings aren't loaded yet
-function pickRandom(arr, excludeId) {
-  if (!arr.length) return null;
-  if (arr.length === 1) return arr[0];
-  let q;
-  let attempts = 0;
-  do { q = arr[Math.floor(Math.random() * arr.length)]; attempts++; }
-  while (q.id === excludeId && attempts < 20);
-  return q;
-}
-
-function ls_get(key, fb) {
-  try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fb; } catch { return fb; }
-}
-function ls_set(key, v) {
-  try { localStorage.setItem(key, JSON.stringify(v)); } catch {}
-}
-
-// Firebase read/write helpers
-async function fbGet(path, fallback) {
-  try {
-    const snap = await get(ref(db, path));
-    return snap.exists() ? snap.val() : fallback;
-  } catch { return fallback; }
-}
-async function fbSet(path, value) {
-  try { await set(ref(db, path), value); } catch (e) { console.error("fbSet error", e); }
-}
-
-const ADMIN_PW_KEY = "aq_admin_pw"; // stored locally only
-
-export default function App() {
-  const [myId] = useState(() => {
-    let id = localStorage.getItem("aq_myid");
-    if (!id) { id = `p_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`; localStorage.setItem("aq_myid", id); }
-    return id;
-  });
-
-  // screen: "home" | "solo" | "lobby" | "game"
-  const [screen, setScreen] = useState("home");
-  const [nameInput, setNameInput] = useState("");
-  const [joinError, setJoinError] = useState("");
-  const [myName, setMyName] = useState(() => localStorage.getItem("aq_myname") || "");
-  const [mode, setMode] = useState(null);
-
-  // Shared Firebase state
-  const [players, setPlayers] = useState([]);
-  const [gameState, setGameState] = useState(null);
-  const [ratings, setRatings] = useState({});
-  const [customQuestions, setCustomQuestions] = useState([]);
-  const [aboutText, setAboutText] = useState(DEFAULT_ABOUT);
-  const [instructionsText, setInstructionsText] = useState(DEFAULT_INSTRUCTIONS);
-  const [loaded, setLoaded] = useState(false);
-
-  // UI state
-  const [showAbout, setShowAbout] = useState(false);
-  const [showInstructions, setShowInstructions] = useState(false);
-  const [showAdmin, setShowAdmin] = useState(false);
-  const [adminPw, setAdminPw] = useState("");
-  const [adminAuthed, setAdminAuthed] = useState(false);
-  const [adminTab, setAdminTab] = useState("instructions");
-  const [adminError, setAdminError] = useState("");
-  const [flipping, setFlipping] = useState(false);
-  const [justRated, setJustRated] = useState(false);
-  const [starHover, setStarHover] = useState(0);
-  const [editAbout, setEditAbout] = useState("");
-  const [editInstructions, setEditInstructions] = useState("");
-  const [editQ, setEditQ] = useState(null);
-  const [newQText, setNewQText] = useState("");
-  const [newQHint, setNewQHint] = useState("");
-  const [newQAuthor, setNewQAuthor] = useState("");
-  const [showAddQ, setShowAddQ] = useState(false);
-  const [adminPwNew, setAdminPwNew] = useState("");
-  const [toast, setToast] = useState("");
-  // Solo
-  const [soloQ, setSoloQ] = useState(null);
-  const [soloJustRated, setSoloJustRated] = useState(false);
-  const [soloStarHover, setSoloStarHover] = useState(0);
-  const [soloBear, setSoloBear] = useState(false);
-  const [soloSource, setSoloSource] = useState("main");
-  // Suggest a question
-  const [showSuggest, setShowSuggest] = useState(false);
-  const [suggestText, setSuggestText] = useState("");
-  const [suggestName, setSuggestName] = useState("");
-  const [pendingSuggestions, setPendingSuggestions] = useState([]);
-  // Bear Camp
-  const [bearCampCustom, setBearCampCustom] = useState([]);
-  const [showBearCamp, setShowBearCamp] = useState(false);
-  const [bcText, setBcText] = useState("");
-  const [bcName, setBcName] = useState("");
-
-  const allQ = [...JEFF_QUESTIONS, ...BONUS_QUESTIONS, ...customQuestions];
-  const bearCampQ = [...BEAR_CAMP_SEED, ...bearCampCustom];
-
-  // ── Firebase listeners ────────────────────────────────────────────────────
-  useEffect(() => {
-    const unsubs = [];
-    const listen = (path, setter) => {
-      const r = ref(db, path);
-      const unsub = onValue(r, snap => setter(snap.exists() ? snap.val() : null));
-      unsubs.push(unsub);
-    };
-
-    listen("players", v => setPlayers(v ? Object.values(v).sort((a, b) => a.joinedAt - b.joinedAt) : []));
-    listen("gameState", v => setGameState(v));
-    listen("ratings", v => setRatings(v || {}));
-    listen("customQuestions", v => setCustomQuestions(v ? Object.values(v) : []));
-    listen("bearCampQuestions", v => setBearCampCustom(v ? Object.values(v) : []));
-    listen("pendingSuggestions", v => setPendingSuggestions(v ? Object.values(v).sort((a,b) => a.addedAt - b.addedAt) : []));
-    listen("aboutText", v => { if (v) setAboutText(v); });
-    listen("instructionsText", v => { if (v) setInstructionsText(v); });
-
-    // Check if this player was already in a session
-    setTimeout(() => {
-      const savedName = localStorage.getItem("aq_myname");
-      const savedMode = localStorage.getItem("aq_mode");
-      if (savedName && savedMode === "solo") {
-        const wasBear = localStorage.getItem("aq_solobear") === "1";
-        setMyName(savedName); setMode("solo"); setScreen("solo");
-        if (wasBear) { setSoloBear(true); setSoloSource("main"); }
-        setSoloQ(pickRandom(JEFF_QUESTIONS, null));
-      }
-      setLoaded(true);
-    }, 600);
-
-    return () => unsubs.forEach(u => u());
-  }, []);
-
-  const isHost = players.length > 0 && players[0].id === myId;
-
-  // Heartbeat — update lastActive every 60s so stale players can be detected
-  useEffect(() => {
-    if (mode !== "multi") return;
-    const interval = setInterval(async () => {
-      await fbSet(`players/${myId}/lastActive`, Date.now());
-    }, 60000);
-    return () => clearInterval(interval);
-  }, [mode, myId]);
-
-  // Auto-remove players inactive for more than 2 hours
-  useEffect(() => {
-    if (!isHost || players.length === 0) return;
-    const TWO_HOURS = 2 * 60 * 60 * 1000;
-    const stale = players.filter(p => p.id !== myId && p.lastActive && Date.now() - p.lastActive > TWO_HOURS);
-    stale.forEach(p => fbSet(`players/${p.id}`, null));
-  }, [players, isHost, myId]);
-
-  // ── Rejoin multiplayer if was in session
-  useEffect(() => {
-    if (!loaded) return;
-    const savedName = localStorage.getItem("aq_myname");
-    const savedMode = localStorage.getItem("aq_mode");
-    if (savedName && savedMode === "multi" && players.find(p => p.id === myId)) {
-      setMyName(savedName); setMode("multi");
-      setScreen(gameState ? "game" : "lobby");
-    }
-  }, [loaded, players, gameState, myId]);
-
-  const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(""), 2800); };
-  const getAvgRating = (id) => { const r = ratings[id]; if (!r || !r.count) return null; return (r.total / r.count).toFixed(1); };
-  const getPlayer = (id) => players.find(p => p.id === id);
-
-  // ── Solo ─────────────────────────────────────────────────────────────────
-  const startSolo = () => {
-    localStorage.setItem("aq_mode", "solo");
-    localStorage.setItem("aq_myname", "Solo");
-    localStorage.removeItem("aq_solobear");
-    setSoloBear(false);
-    setMode("solo"); setSoloQ(pickWeighted(allQ, null, ratings));
-    setSoloJustRated(false); setScreen("solo");
-  };
-
-  // Solo Bear Camp: alternates one main-deck question, then one Bear Camp question.
-  const startSoloBear = () => {
-    localStorage.setItem("aq_mode", "solo");
-    localStorage.setItem("aq_myname", "Solo");
-    localStorage.setItem("aq_solobear", "1");
-    setSoloBear(true); setSoloSource("main");
-    setMode("solo"); setSoloQ(pickWeighted(allQ, null, ratings));
-    setSoloJustRated(false); setScreen("solo");
-  };
-
-  const soloNext = () => {
-    setFlipping(true);
-    setTimeout(() => {
-      if (soloBear) {
-        const nextSource = soloSource === "main" ? "bear" : "main";
-        const pool = nextSource === "bear" ? bearCampQ : allQ;
-        setSoloQ(pickWeighted(pool.length ? pool : allQ, soloQ?.id, ratings));
-        setSoloSource(nextSource);
-      } else {
-        const next = soloQ?.followUp ? findById(allQ, soloQ.followUp) : null;
-        setSoloQ(next || pickWeighted(allQ, soloQ?.id, ratings));
-      }
-      setSoloJustRated(false); setSoloStarHover(0); setFlipping(false);
-    }, 280);
-  };
-
-  const soloSkip = async () => {
-    if (!soloQ) return;
-    const existing = ratings[soloQ.id] || { total: 0, count: 0, skips: 0 };
-    const updated = { ...existing, skips: (existing.skips || 0) + 1 };
-    await fbSet(`ratings/${soloQ.id}`, updated);
-    soloNext();
-  };
-
-  const soloRate = async (stars) => {
-    if (!soloQ) return;
-    const existing = ratings[soloQ.id] || { total: 0, count: 0, skips: 0 };
-    await fbSet(`ratings/${soloQ.id}`, { ...existing, total: existing.total + stars, count: existing.count + 1 });
-    setSoloJustRated(true);
-  };
-
-  // ── Suggest a question ───────────────────────────────────────────────────
-  const submitSuggestion = async () => {
-    if (!suggestText.trim()) return;
-    const id = `sq_${Date.now()}`;
-    const q = {
-      id, text: suggestText.trim(),
-      hint: null,
-      author: suggestName.trim() || "Anonymous",
-      type: "community",
-      addedAt: Date.now(),
-      pending: true
-    };
-    await fbSet(`pendingSuggestions/${id}`, q);
-    await fbSet(`customQuestions/${id}`, q);
-    setSuggestText(""); setSuggestName(""); setShowSuggest(false);
-    showToast(`${q.author}'s question is up next!`);
-    // In solo mode, set it as the next question immediately
-    if (mode === "solo") {
-      setFlipping(true);
-      setTimeout(() => { setSoloQ(q); setSoloJustRated(false); setSoloStarHover(0); setFlipping(false); }, 280);
-    } else if (gameState) {
-      // In multiplayer, inject into gameState as next question
-      await fbSet("gameState", { ...gameState, nextQ: q });
-    }
-  };
-
-  // ── Join multiplayer ──────────────────────────────────────────────────────
-  const joinMulti = async () => {
-    const name = nameInput.trim();
-    if (!name) { setJoinError("Please enter your name."); return; }
-    const current = await fbGet("players", {});
-    const list = current ? Object.values(current) : [];
-    if (list.find(p => p.id === myId)) {
-      localStorage.setItem("aq_myname", name); localStorage.setItem("aq_mode", "multi");
-      setMyName(name); setMode("multi");
-      const gs = await fbGet("gameState", null);
-      setScreen(gs ? "game" : "lobby"); return;
-    }
-    if (list.length >= 15) { setJoinError("Game is full (15 players max)."); return; }
-    const player = { id: myId, name, joinedAt: Date.now(), lastActive: Date.now() };
-    await fbSet(`players/${myId}`, player);
-    localStorage.setItem("aq_myname", name); localStorage.setItem("aq_mode", "multi");
-    setMyName(name); setMode("multi"); setScreen("lobby");
-  };
-
-  // ── Start / manage game ───────────────────────────────────────────────────
-  const startGame = async (bearCamp = false) => {
-    if (players.length < 2) { showToast("Need at least 2 players!"); return; }
-    // A Bear Camp game always opens with a main-deck question, then alternates.
-    const q = pickWeighted(allQ, null, ratings);
-    const questioner = players[Math.floor(Math.random() * players.length)];
-    const others = players.filter(p => p.id !== questioner.id);
-    const answerer = others[Math.floor(Math.random() * others.length)];
-    const gs = { currentQ: q, questioner: questioner.id, answerer: answerer.id, round: 1, usedPlayerIds: [answerer.id], bearCamp: !!bearCamp, qSource: "main" };
-    await fbSet("gameState", gs);
-    setScreen("game");
-  };
-
-  const nextQuestion = async () => {
-    if (!gameState) return;
-    setFlipping(true);
-    setTimeout(async () => {
-      // Pick the next question. In Bear Camp games we strictly alternate
-      // between the main deck and the Bear Camp deck. A suggested question
-      // (nextQ), if present, is honored without disturbing the alternation.
-      let q, nextSource = gameState.qSource || "main";
-      if (gameState.nextQ) {
-        q = gameState.nextQ;
-      } else if (gameState.bearCamp) {
-        nextSource = gameState.qSource === "main" ? "bear" : "main";
-        const pool = nextSource === "bear" ? bearCampQ : allQ;
-        q = pickWeighted(pool.length ? pool : allQ, gameState.currentQ?.id, ratings);
-      } else {
-        const followUp = gameState.currentQ?.followUp ? findById(allQ, gameState.currentQ.followUp) : null;
-        q = followUp || pickWeighted(allQ, gameState.currentQ?.id, ratings);
-      }
-      const newQuestioner = players.find(p => p.id === gameState.answerer) || players[0];
-      let used = gameState.usedPlayerIds || [];
-      const eligible = players.filter(p => p.id !== newQuestioner.id && !used.includes(p.id));
-      let pool = eligible.length > 0 ? eligible : players.filter(p => p.id !== newQuestioner.id);
-      if (eligible.length === 0) used = [];
-      if (!pool.length) pool = players;
-      const newAnswerer = pool[Math.floor(Math.random() * pool.length)];
-      const gs = {
-        ...gameState, currentQ: q,
-        questioner: newQuestioner.id, answerer: newAnswerer.id,
-        round: (gameState.round || 1) + 1,
-        usedPlayerIds: [...used, newAnswerer.id],
-        nextQ: null,
-        qSource: nextSource
-      };
-      await fbSet("gameState", gs);
-      setJustRated(false); setStarHover(0); setFlipping(false);
-    }, 280);
-  };
-
-  const skipQ = async () => {
-    if (!gameState?.currentQ) return;
-    const existing = ratings[gameState.currentQ.id] || { total: 0, count: 0, skips: 0 };
-    await fbSet(`ratings/${gameState.currentQ.id}`, { ...existing, skips: (existing.skips || 0) + 1 });
-    nextQuestion();
-  };
-
-  const rateQ = async (stars) => {
-    if (!gameState?.currentQ) return;
-    const existing = ratings[gameState.currentQ.id] || { total: 0, count: 0, skips: 0 };
-    await fbSet(`ratings/${gameState.currentQ.id}`, { ...existing, total: existing.total + stars, count: existing.count + 1 });
-    setJustRated(true);
-  };
-
-  const endGame = async () => {
-    await fbSet("gameState", null);
-    // Remove this player from players list
-    await fbSet(`players/${myId}`, null);
-    localStorage.removeItem("aq_mode"); localStorage.removeItem("aq_myname");
-    setMyName(""); setNameInput(""); setMode(null); setScreen("home");
-  };
-
-  const kickPlayer = async (playerId) => {
-    await fbSet(`players/${playerId}`, null);
-    showToast("Player removed.");
-  };
-
-  // ── Bear Camp ───────────────────────────────────────────────────────────────
-  const submitBearCampQuestion = async () => {
-    if (!bcText.trim()) return;
-    const id = `bc_${Date.now()}`;
-    const q = { id, text: bcText.trim(), hint: null, author: bcName.trim() || "Anonymous", type: "bearcamp", custom: true, addedAt: Date.now() };
-    await fbSet(`bearCampQuestions/${id}`, q);
-    setBcText(""); setBcName("");
-    showToast("Added to the Bear Camp deck!");
-  };
-
-  const deleteBearCampQ = async (id) => { await fbSet(`bearCampQuestions/${id}`, null); };
-
-  // ── Admin ─────────────────────────────────────────────────────────────────
-  const adminLogin = () => {
-    const stored = ls_get(ADMIN_PW_KEY, "admin123");
-    if (adminPw === stored) {
-      setAdminAuthed(true); setAdminError("");
-      setEditAbout(aboutText); setEditInstructions(instructionsText);
-    } else setAdminError("Incorrect password.");
-  };
-
-  const saveAbout = async () => { await fbSet("aboutText", editAbout); showToast("About saved!"); };
-  const saveInstructions = async () => { await fbSet("instructionsText", editInstructions); showToast("Instructions saved!"); };
-
-  const addCustomQ = async () => {
-    if (!newQText.trim()) return;
-    const id = `cq_${Date.now()}`;
-    const q = { id, text: newQText.trim(), hint: newQHint.trim() || null, author: newQAuthor.trim() || "Guest", type: "community" };
-    await fbSet(`customQuestions/${id}`, q);
-    setNewQText(""); setNewQHint(""); setNewQAuthor(""); setShowAddQ(false); showToast("Question added!");
-  };
-
-  const deleteCustomQ = async (id) => { await fbSet(`customQuestions/${id}`, null); };
-  const saveEditQ = async () => {
-    if (!editQ) return;
-    await fbSet(`customQuestions/${editQ.id}`, editQ);
-    setEditQ(null); showToast("Updated!");
-  };
-  // ── Derived ───────────────────────────────────────────────────────────────
-  const currentQ = gameState?.currentQ;
-  const questioner = gameState ? getPlayer(gameState.questioner) : null;
-  const answerer = gameState ? getPlayer(gameState.answerer) : null;
-  const amQuestioner = gameState?.questioner === myId;
-  const amAnswerer = gameState?.answerer === myId;
-  const inBearMode = soloBear || gameState?.bearCamp === true;
-  const currentRating = currentQ ? getAvgRating(currentQ.id) : null;
-  const currentRatingCount = currentQ ? (ratings[currentQ.id]?.count || 0) : 0;
-  const soloRating = soloQ ? getAvgRating(soloQ.id) : null;
-  const soloRatingCount = soloQ ? (ratings[soloQ.id]?.count || 0) : 0;
-
-  if (!loaded) return (
-    <>
-      <style>{`body{background:#0c0804;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;font-family:'Georgia',serif;color:#c9923a;}`}</style>
-      <div style={{ textAlign: "center", opacity: 0.6 }}>
-        <div style={{ fontSize: "2rem", marginBottom: "1rem", fontStyle: "italic" }}>Ask Questions!</div>
-        <div style={{ fontSize: ".8rem", letterSpacing: ".2em", textTransform: "uppercase" }}>Loading…</div>
-      </div>
-    </>
-  );
-
-  return (
-    <>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;0,900;1,400&family=Lora:ital,wght@0,400;0,600;1,400&display=swap');
-        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-        :root {
-          --cream: #f5f0e8; --parchment: #ede5d0; --dark: #100c05;
-          --burgundy: #7a1b2e; --gold: #c9923a; --gold-lt: #e8c068;
-          --amber: #d4852a; --muted: #8a7060; --green: #2d6b47;
-        }
-        html, body { height: 100%; }
-        body { background: var(--dark); font-family: 'Lora', Georgia, serif; color: var(--cream); min-height: 100vh; overflow-x: hidden; }
-        .bg { position: fixed; inset: 0; z-index: 0; pointer-events: none;
-          background: radial-gradient(ellipse at 20% 20%, rgba(201,146,58,.07) 0%, transparent 55%),
-                      radial-gradient(ellipse at 80% 80%, rgba(122,27,46,.09) 0%, transparent 55%), #0c0804; }
-        .glow { position: fixed; inset: 0; z-index: 0; pointer-events: none;
-          background: radial-gradient(ellipse 55% 35% at 50% 0%, rgba(212,133,42,.05) 0%, transparent 70%);
-          animation: flicker 6s ease-in-out infinite alternate; }
-        @keyframes flicker { 0%{opacity:.6} 50%{opacity:1} 100%{opacity:.8} }
-        .app { position: relative; z-index: 1; min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 0 1rem 5rem; }
-
-        .hdr { width: 100%; max-width: 720px; padding: 2rem 0 1.2rem; text-align: center; border-bottom: 1px solid rgba(201,146,58,.15); margin-bottom: 2rem; }
-        .hdr-eye { font-size: .62rem; letter-spacing: .25em; text-transform: uppercase; color: var(--gold); opacity: .7; margin-bottom: .4rem; }
-        .hdr-title { font-family: 'Playfair Display', serif; font-size: clamp(2rem, 6vw, 3.2rem); font-weight: 900; color: var(--cream); }
-        .hdr-title em { font-style: italic; color: var(--gold-lt); }
-        .hdr-sub { font-size: .78rem; color: var(--muted); font-style: italic; margin-top: .35rem; }
-        .hdr-nav { display: flex; justify-content: center; gap: .45rem; flex-wrap: wrap; margin-top: 1rem; }
-        .nav-btn { background: transparent; border: 1px solid rgba(201,146,58,.22); color: var(--gold); font-family: 'Lora', serif; font-size: .7rem; letter-spacing: .1em; text-transform: uppercase; padding: .28rem .75rem; border-radius: 2px; cursor: pointer; transition: all .2s; }
-        .nav-btn:hover { background: rgba(201,146,58,.1); border-color: var(--gold); }
-        .nav-btn.warn { color: #b06060; border-color: rgba(176,96,96,.22); }
-        .nav-btn.warn:hover { background: rgba(176,96,96,.1); }
-
-        .home-wrap { width: 100%; max-width: 460px; }
-        .home-card { background: linear-gradient(145deg, #261a0c 0%, #19110a 100%); border: 1px solid rgba(201,146,58,.2); border-radius: 4px; padding: 2.5rem; box-shadow: 0 20px 60px rgba(0,0,0,.55), inset 0 1px 0 rgba(201,146,58,.1); position: relative; overflow: hidden; }
-        .home-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, transparent, var(--gold), transparent); opacity: .4; }
-        .home-title { font-family: 'Playfair Display', serif; font-size: 1.3rem; font-weight: 700; color: var(--gold-lt); margin-bottom: 1.8rem; }
-        .mode-lbl { font-size: .65rem; letter-spacing: .18em; text-transform: uppercase; color: var(--muted); margin-bottom: .7rem; display: block; }
-        .mode-desc { font-size: .78rem; color: var(--muted); font-style: italic; margin-bottom: .9rem; line-height: 1.5; }
-        .divider-line { border: none; border-top: 1px solid rgba(201,146,58,.12); margin: 1.5rem 0; }
-        .form-lbl { display: block; font-size: .65rem; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); margin-bottom: .35rem; }
-        .form-input { width: 100%; background: rgba(255,255,255,.04); border: 1px solid rgba(201,146,58,.18); border-radius: 3px; color: var(--cream); font-family: 'Lora', serif; font-size: .95rem; padding: .65rem .9rem; outline: none; transition: border-color .2s; }
-        .form-input:focus { border-color: var(--gold); }
-        .form-textarea { width: 100%; background: rgba(255,255,255,.04); border: 1px solid rgba(201,146,58,.18); border-radius: 3px; color: var(--cream); font-family: 'Lora', serif; font-size: .88rem; padding: .65rem .9rem; outline: none; transition: border-color .2s; resize: vertical; line-height: 1.6; }
-        .form-textarea:focus { border-color: var(--gold); }
-        .err { color: #d08080; font-size: .78rem; margin-top: .4rem; font-style: italic; }
-
-        .btn-gold { background: linear-gradient(135deg, var(--gold) 0%, var(--amber) 100%); border: none; border-radius: 3px; color: #100c05; font-family: 'Playfair Display', serif; font-size: .95rem; font-weight: 700; padding: .75rem 2rem; cursor: pointer; transition: all .2s; box-shadow: 0 4px 16px rgba(201,146,58,.25); width: 100%; }
-        .btn-gold:hover { background: linear-gradient(135deg, var(--gold-lt) 0%, var(--gold) 100%); transform: translateY(-1px); box-shadow: 0 7px 22px rgba(201,146,58,.35); }
-        .btn-gold:disabled { opacity: .5; cursor: not-allowed; transform: none; }
-        .btn-ghost { background: transparent; border: 1px solid rgba(201,146,58,.2); border-radius: 3px; color: var(--muted); font-family: 'Lora', serif; font-size: .85rem; padding: .72rem 1.6rem; cursor: pointer; transition: all .2s; }
-        .btn-ghost:hover { border-color: var(--muted); color: var(--cream); }
-        .btn-green { background: linear-gradient(135deg, var(--green) 0%, #1f4f32 100%); border: 1px solid rgba(45,107,71,.4); border-radius: 3px; color: var(--cream); font-family: 'Playfair Display', serif; font-size: .95rem; font-weight: 700; padding: .75rem 2rem; cursor: pointer; transition: all .2s; width: 100%; box-shadow: 0 4px 16px rgba(45,107,71,.2); }
-        .btn-green:hover { background: linear-gradient(135deg, #35805a 0%, var(--green) 100%); transform: translateY(-1px); }
-        .btn-sm { padding: .38rem .85rem !important; font-size: .75rem !important; width: auto !important; }
-        .btn-red { background: linear-gradient(135deg, var(--burgundy) 0%, #4e1020 100%); border: 1px solid rgba(122,27,46,.35); border-radius: 3px; color: var(--cream); font-family: 'Lora', serif; font-size: .85rem; padding: .6rem 1.3rem; cursor: pointer; transition: all .2s; }
-        .btn-red:hover { background: linear-gradient(135deg, #8a2038 0%, var(--burgundy) 100%); }
-
-        .lobby-wrap { width: 100%; max-width: 560px; }
-        .card { background: linear-gradient(145deg, #261a0c 0%, #19110a 100%); border: 1px solid rgba(201,146,58,.2); border-radius: 4px; padding: 2.2rem; box-shadow: 0 20px 55px rgba(0,0,0,.5), inset 0 1px 0 rgba(201,146,58,.1); position: relative; overflow: hidden; }
-        .card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, transparent, var(--gold), transparent); opacity: .35; }
-        .card-title { font-family: 'Playfair Display', serif; font-size: 1.3rem; color: var(--gold-lt); margin-bottom: 1rem; }
-        .player-list { display: flex; flex-wrap: wrap; gap: .5rem; margin: .8rem 0 1.2rem; }
-        .p-chip { background: rgba(201,146,58,.08); border: 1px solid rgba(201,146,58,.15); border-radius: 2rem; padding: .3rem .85rem; font-size: .82rem; color: var(--parchment); }
-        .p-chip.me { border-color: var(--gold); color: var(--gold-lt); }
-        .p-count { font-size: .72rem; color: var(--muted); font-style: italic; margin-bottom: .5rem; }
-
-        .game-wrap { width: 100%; max-width: 680px; }
-        .role-bar { display: flex; align-items: center; justify-content: center; gap: 1.5rem; flex-wrap: wrap; padding: .9rem 1.5rem; background: rgba(201,146,58,.05); border: 1px solid rgba(201,146,58,.13); border-radius: 3px; margin-bottom: 1.4rem; }
-        .role-item { text-align: center; }
-        .role-lbl { font-size: .58rem; letter-spacing: .18em; text-transform: uppercase; color: var(--muted); margin-bottom: .2rem; }
-        .role-name { font-family: 'Playfair Display', serif; font-size: .95rem; color: var(--cream); }
-        .role-name.me { color: var(--gold-lt); }
-        .role-sep { width: 1px; height: 2rem; background: rgba(201,146,58,.18); }
-        .round-lbl { font-size: .6rem; letter-spacing: .15em; text-transform: uppercase; color: var(--muted); }
-
-        .q-card { background: linear-gradient(145deg, #261a0c 0%, #19110a 100%); border: 1px solid rgba(201,146,58,.2); border-radius: 4px; padding: 2.4rem 2.4rem 2rem; box-shadow: 0 20px 55px rgba(0,0,0,.5), inset 0 1px 0 rgba(201,146,58,.1); position: relative; overflow: hidden; transition: opacity .28s, transform .28s; }
-        .q-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, transparent, var(--gold), transparent); opacity: .4; }
-        .q-card.flip { opacity: 0; transform: translateY(10px) scale(.98); }
-        .q-num { position: absolute; top: 1rem; right: 1.2rem; font-size: .6rem; color: rgba(201,146,58,.28); }
-        .q-source { display: flex; align-items: center; gap: .45rem; margin-bottom: 1rem; }
-        .q-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--gold); flex-shrink: 0; }
-        .q-dot.ai { background: #5b9bd5; }
-        .q-dot.comm { background: var(--burgundy); }
-        .q-dot.bear { background: #c8772e; }
-        .q-src-lbl { font-size: .62rem; letter-spacing: .15em; text-transform: uppercase; color: var(--muted); }
-        .q-text { font-family: 'Playfair Display', serif; font-size: clamp(1.2rem, 3.5vw, 1.7rem); font-weight: 400; line-height: 1.45; color: var(--cream); margin-bottom: 1.1rem; }
-        .q-hint { background: rgba(201,146,58,.05); border-left: 2px solid rgba(201,146,58,.25); padding: .5rem .8rem; border-radius: 0 2px 2px 0; font-size: .78rem; color: var(--muted); font-style: italic; margin-bottom: 1rem; line-height: 1.5; }
-
-        .rating-wrap { margin-top: 1.4rem; padding-top: 1.1rem; border-top: 1px solid rgba(201,146,58,.1); display: flex; flex-direction: column; align-items: center; gap: .4rem; }
-        .rating-lbl { font-size: .62rem; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
-        .stars { display: flex; gap: .2rem; }
-        .star { font-size: 1.4rem; cursor: pointer; color: rgba(201,146,58,.18); transition: color .12s, transform .12s; user-select: none; }
-        .star.hl { color: var(--gold-lt); transform: scale(1.2); }
-        .rating-done { font-size: .72rem; color: var(--gold); font-style: italic; animation: fadeUp .3s; }
-        .rating-avg { font-size: .68rem; color: var(--muted); font-style: italic; }
-        @keyframes fadeUp { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:none} }
-
-        .actions { display: flex; justify-content: center; gap: .8rem; margin-top: 1.6rem; flex-wrap: wrap; }
-
-        .ticker { display: flex; gap: .4rem; flex-wrap: wrap; justify-content: center; margin-bottom: 1.1rem; }
-        .t-chip { padding: .22rem .6rem; border-radius: 1rem; border: 1px solid rgba(201,146,58,.1); font-size: .76rem; color: var(--muted); transition: all .3s; }
-        .t-chip.q { border-color: var(--gold); background: rgba(201,146,58,.1); color: var(--gold-lt); }
-        .t-chip.a { border-color: var(--burgundy); background: rgba(122,27,46,.12); color: #e8a0b0; }
-
-        .overlay { position: fixed; inset: 0; z-index: 100; background: rgba(8,5,2,.88); display: flex; align-items: flex-start; justify-content: center; padding: 2rem 1rem; overflow-y: auto; animation: fadeUp .2s; }
-        .modal { background: linear-gradient(145deg, #231810 0%, #18100a 100%); border: 1px solid rgba(201,146,58,.2); border-radius: 4px; width: 100%; max-width: 600px; padding: 2.2rem; box-shadow: 0 30px 80px rgba(0,0,0,.7); position: relative; margin-top: 1.5rem; }
-        .modal-title { font-family: 'Playfair Display', serif; font-size: 1.55rem; font-weight: 700; color: var(--gold-lt); margin-bottom: 1.2rem; }
-        .modal-close { position: absolute; top: 1rem; right: 1rem; background: transparent; border: none; color: var(--muted); font-size: 1.1rem; cursor: pointer; transition: color .2s; }
-        .modal-close:hover { color: var(--cream); }
-        .modal-body { font-size: .87rem; line-height: 1.78; color: var(--parchment); white-space: pre-wrap; }
-        .modal-quote { background: rgba(201,146,58,.06); border-left: 3px solid rgba(201,146,58,.3); padding: .85rem 1.1rem; border-radius: 0 3px 3px 0; font-style: italic; color: var(--parchment); margin: 1rem 0; font-size: .87rem; line-height: 1.6; }
-
-        .tab-bar { display: flex; gap: 0; border-bottom: 1px solid rgba(201,146,58,.15); margin-bottom: 1.4rem; flex-wrap: wrap; }
-        .tab { background: transparent; border: none; border-bottom: 2px solid transparent; color: var(--muted); font-family: 'Lora', serif; font-size: .72rem; letter-spacing: .1em; text-transform: uppercase; padding: .45rem .9rem; cursor: pointer; transition: all .2s; }
-        .tab.on { color: var(--gold); border-bottom-color: var(--gold); }
-        .sec-title { font-family: 'Playfair Display', serif; font-size: .95rem; color: var(--gold); margin-bottom: .7rem; padding-bottom: .3rem; border-bottom: 1px solid rgba(201,146,58,.1); }
-        .q-row { display: flex; align-items: flex-start; gap: .6rem; padding: .6rem 0; border-bottom: 1px solid rgba(201,146,58,.06); }
-        .q-row-text { flex: 1; font-size: .8rem; color: var(--parchment); line-height: 1.4; }
-        .q-row-meta { font-size: .66rem; color: var(--muted); font-style: italic; margin-top: .18rem; }
-        .icon-btn { background: transparent; border: 1px solid rgba(201,146,58,.14); border-radius: 2px; color: var(--muted); font-size: .72rem; padding: .22rem .48rem; cursor: pointer; transition: all .2s; }
-        .icon-btn:hover { color: var(--cream); border-color: var(--muted); }
-        .icon-btn.del { border-color: rgba(176,96,96,.2); color: #c06060; }
-        .icon-btn.del:hover { background: rgba(176,96,96,.1); }
-        .stat-row { display: flex; justify-content: space-between; align-items: flex-start; gap: .7rem; padding: .5rem 0; border-bottom: 1px solid rgba(201,146,58,.05); font-size: .78rem; color: var(--parchment); }
-        .stat-badge { background: rgba(201,146,58,.1); border: 1px solid rgba(201,146,58,.18); border-radius: 2px; padding: .1rem .42rem; font-size: .68rem; color: var(--gold); white-space: nowrap; }
-        .hr { border: none; border-top: 1px solid rgba(201,146,58,.1); margin: 1.1rem 0; }
-        .ai-note { font-size: .76rem; color: var(--muted); font-style: italic; margin-bottom: .9rem; line-height: 1.55; }
-        .empty { font-size: .78rem; color: var(--muted); font-style: italic; padding: .5rem 0; }
-
-        .solo-wrap { width: 100%; max-width: 660px; }
-        .solo-badge { display: inline-block; background: rgba(45,107,71,.15); border: 1px solid rgba(45,107,71,.3); border-radius: 2rem; padding: .25rem .8rem; font-size: .68rem; letter-spacing: .12em; text-transform: uppercase; color: #6abf8a; margin-bottom: 1.2rem; }
-
-        .toast { position: fixed; bottom: 2rem; left: 50%; transform: translateX(-50%); background: rgba(38,22,10,.97); border: 1px solid rgba(201,146,58,.28); border-radius: 3px; padding: .6rem 1.4rem; font-size: .8rem; color: var(--gold-lt); z-index: 200; animation: fadeUp .3s; white-space: nowrap; pointer-events: none; }
-
-        @media(max-width:600px) {
-          .q-card { padding: 1.7rem 1.3rem 1.5rem; }
-          .modal { padding: 1.6rem 1.2rem; }
-          .role-bar { gap: .9rem; padding: .7rem 1rem; }
-        }
-      `}</style>
-
-      <div className="bg" /><div className="glow" />
-      {toast && <div className="toast">{toast}</div>}
-
-      <div className="app">
-        {/* HEADER */}
-        <header className="hdr">
-          <p className="hdr-eye">A dinner party game</p>
-          <h1 className="hdr-title"><em>Ask</em> Questions!</h1>
-          {screen !== "home" && (
-            <p className="hdr-sub">
-              {mode === "solo" ? "Solo mode" : `${players.length} player${players.length !== 1 ? "s" : ""}`}
-              {" · "}{allQ.length} questions in deck
-            </p>
-          )}
-          <div className="hdr-nav">
-            <button className="nav-btn" onClick={() => setShowInstructions(true)}>How to Play</button>
-            <button className="nav-btn" onClick={() => setShowAbout(true)}>About</button>
-            {(screen === "home" || screen === "lobby") && (
-              <button className="nav-btn" style={{borderColor:"rgba(200,119,46,.5)",color:"#cf9a5c"}} onClick={() => setShowBearCamp(true)}>Bear Camp</button>
-            )}
-            {(screen === "lobby" || screen === "game" || screen === "solo") && (
-              <button className="nav-btn" onClick={() => { setShowAdmin(true); setAdminAuthed(false); setAdminPw(""); setAdminError(""); }}>Admin</button>
-            )}
-            {screen === "game" && isHost && (
-              <button className="nav-btn warn" onClick={endGame}>End Game</button>
-            )}
-            {(screen === "solo" || screen === "game") && (
-              inBearMode ? (
-                <button className="nav-btn" style={{borderColor:"rgba(200,119,46,.5)",color:"#cf9a5c"}} onClick={() => setShowBearCamp(true)}>＋ Suggest a Bear Camp Question</button>
-              ) : (
-                <button className="nav-btn" style={{borderColor:"rgba(45,107,71,.4)",color:"#6abf8a"}} onClick={() => setShowSuggest(true)}>＋ Suggest a Question</button>
-              )
-            )}
-            {(screen === "lobby" || screen === "solo") && (
-              <button className="nav-btn warn" onClick={endGame}>Leave</button>
-            )}
-          </div>
-        </header>
-
-        {/* HOME */}
-        {screen === "home" && (
-          <div className="home-wrap">
-            <div className="home-card">
-              <p className="home-title">How would you like to play?</p>
-              <div style={{ marginBottom: "0" }}>
-                <span className="mode-lbl">Solo Mode</span>
-                <p className="mode-desc">Just you and the questions. Browse at your own pace, reflect, or prep great conversation starters for your next gathering.</p>
-                <button className="btn-green" onClick={startSolo}>Play Solo →</button>
-                <button className="btn-ghost" onClick={startSoloBear} style={{ width: "auto", marginTop: ".6rem", borderColor: "rgba(200,119,46,.5)", color: "#cf9a5c" }}>Play Bear Camp Solo →</button>
-              </div>
-              <hr className="divider-line" />
-              <div>
-                <span className="mode-lbl">Multiplayer · Up to 15 players</span>
-                <p className="mode-desc">Share the link with your group. Everyone joins with their name. The app selects who answers each round.</p>
-                <div style={{ marginBottom: ".8rem" }}>
-                  <label className="form-lbl">Your Name</label>
-                  <input className="form-input" placeholder="e.g. Sarah" value={nameInput}
-                    onChange={e => setNameInput(e.target.value)}
-                    onKeyDown={e => e.key === "Enter" && joinMulti()} autoComplete="off" />
-                  {joinError && <p className="err">{joinError}</p>}
-                </div>
-                <button className="btn-gold" onClick={joinMulti}>Join Game →</button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* SOLO */}
-        {screen === "solo" && soloQ && (
-          <div className="solo-wrap">
-            <div style={{ textAlign: "center", marginBottom: "1.2rem" }}>
-              <span className="solo-badge" style={soloBear ? { background: "rgba(200,119,46,.15)", borderColor: "rgba(200,119,46,.35)", color: "#cf9a5c" } : {}}>{soloBear ? "Bear Camp · Solo · alternating decks" : "Solo Mode"}</span>
-            </div>
-            <div className={`q-card ${flipping ? "flip" : ""}`}>
-              <span className="q-num">#{soloQ.id}</span>
-              <div className="q-source">
-                <div className={`q-dot ${soloQ.type === "bearcamp" ? "bear" : soloQ.type === "ai" ? "ai" : soloQ.type === "community" ? "comm" : ""}`} />
-                <span className="q-src-lbl">{soloQ.type === "bearcamp" ? (soloQ.author ? `Bear Camp · ${soloQ.author}` : "Bear Camp") : soloQ.type === "ai" ? "AI Generated" : soloQ.author ? `Added by ${soloQ.author}` : "Jeff's Original"}{soloQ.followUp ? " · Part 1 of 2" : ""}</span>
-              </div>
-              <p className="q-text">{soloQ.text}</p>
-              {soloQ.hint && <div className="q-hint">💡 {soloQ.hint}</div>}
-              <div className="rating-wrap">
-                {!soloJustRated ? (<>
-                  <p className="rating-lbl">Rate this question</p>
-                  <div className="stars">
-                    {[1, 2, 3, 4, 5].map(n => (
-                      <span key={n} className={`star ${n <= soloStarHover ? "hl" : ""}`}
-                        onMouseEnter={() => setSoloStarHover(n)} onMouseLeave={() => setSoloStarHover(0)}
-                        onClick={() => soloRate(n)}>★</span>
-                    ))}
-                  </div>
-                  {soloRatingCount > 0 && <p className="rating-avg">Avg: {soloRating} ★ · {soloRatingCount} rating{soloRatingCount !== 1 ? "s" : ""}</p>}
-                </>) : (
-                  <p className="rating-done">Rated! {soloRatingCount} total rating{soloRatingCount !== 1 ? "s" : ""}</p>
-                )}
-              </div>
-            </div>
-            <div className="actions">
-              <button className="btn-ghost" onClick={soloSkip}>Skip</button>
-              <button className="btn-gold" style={{ width: "auto" }} onClick={soloNext}>Next Question →</button>
-            </div>
-          </div>
-        )}
-
-        {/* LOBBY */}
-        {screen === "lobby" && (
-          <div className="lobby-wrap">
-            <div className="card">
-              <p className="card-title">Waiting for Players</p>
-              <p className="p-count">{players.length} / 15 joined</p>
-              <div className="player-list">
-                {players.map(p => (
-                  <div key={p.id} style={{display:"flex",alignItems:"center",gap:".4rem"}}>
-                    <div className={`p-chip ${p.id === myId ? "me" : ""}`}>
-                      {p.name}{p.id === myId ? " (you)" : ""}
-                    </div>
-                    {isHost && p.id !== myId && (
-                      <button className="icon-btn del" style={{fontSize:".6rem",padding:".15rem .4rem"}} onClick={() => kickPlayer(p.id)} title="Remove player">✕</button>
-                    )}
-                  </div>
-                ))}
-              </div>
-              {players.length < 2 && <p style={{ fontSize: ".78rem", color: "var(--muted)", fontStyle: "italic", marginBottom: "1rem" }}>Waiting for at least 2 players…</p>}
-              {isHost ? (<>
-                <p style={{ fontSize: ".73rem", color: "var(--muted)", fontStyle: "italic", marginBottom: ".8rem" }}>As the first player, you start the game when everyone is ready.</p>
-                <div style={{ display: "flex", gap: ".7rem", flexWrap: "wrap", alignItems: "center" }}>
-                  <button className="btn-gold" onClick={() => startGame(false)} disabled={players.length < 2} style={{ width: "auto" }}>Start Game →</button>
-                  <button className="btn-green" onClick={() => startGame(true)} disabled={players.length < 2} style={{ width: "auto" }}>Start Bear Camp Game →</button>
-                </div>
-                <p style={{ fontSize: ".7rem", color: "var(--muted)", fontStyle: "italic", marginTop: ".7rem" }}>Bear Camp alternates one question from the main deck, then one from the Bear Camp deck — back and forth all night.</p>
-              </>) : (
-                <p style={{ fontSize: ".8rem", color: "var(--muted)", fontStyle: "italic" }}>Waiting for {players[0]?.name || "the host"} to start…</p>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* GAME */}
-        {screen === "game" && gameState && (
-          <div className="game-wrap">
-            {gameState.bearCamp && (
-              <div style={{ textAlign: "center", marginBottom: ".9rem" }}>
-                <span className="solo-badge" style={{ background: "rgba(200,119,46,.15)", borderColor: "rgba(200,119,46,.35)", color: "#cf9a5c", marginBottom: 0 }}>Bear Camp · alternating decks</span>
-              </div>
-            )}
-            <div className="ticker">
-              {players.map(p => (
-                <div key={p.id} style={{display:"inline-flex",alignItems:"center",gap:".2rem"}}>
-                  <div className={`t-chip ${p.id === gameState.questioner ? "q" : p.id === gameState.answerer ? "a" : ""}`}>
-                    {p.name}{p.id === myId ? " ✦" : ""}
-                  </div>
-                  {isHost && p.id !== myId && (
-                    <button className="icon-btn del" style={{fontSize:".55rem",padding:".1rem .3rem",borderRadius:"50%"}} onClick={() => kickPlayer(p.id)} title="Remove">✕</button>
-                  )}
-                </div>
-              ))}
-            </div>
-            <div className="role-bar">
-              <div className="role-item">
-                <p className="role-lbl">🎤 Questioner</p>
-                <p className={`role-name ${amQuestioner ? "me" : ""}`}>{questioner?.name}{amQuestioner ? " (you!)" : ""}</p>
-              </div>
-              <div className="role-sep" />
-              <div className="role-item">
-                <p className="role-lbl">💬 Answering</p>
-                <p className={`role-name ${amAnswerer ? "me" : ""}`}>{answerer?.name}{amAnswerer ? " (you!)" : ""}</p>
-              </div>
-              <div className="role-sep" />
-              <div className="role-item">
-                <p className="role-lbl">Round</p>
-                <p className="round-lbl">#{gameState.round}</p>
-              </div>
-            </div>
-            {currentQ && (
-              <div className={`q-card ${flipping ? "flip" : ""}`}>
-                <span className="q-num">#{currentQ.id}</span>
-                <div className="q-source">
-                  <div className={`q-dot ${currentQ.type === "bearcamp" ? "bear" : currentQ.type === "ai" ? "ai" : currentQ.type === "community" ? "comm" : ""}`} />
-                  <span className="q-src-lbl">{currentQ.type === "bearcamp" ? (currentQ.author ? `Bear Camp · ${currentQ.author}` : "Bear Camp") : currentQ.type === "ai" ? "AI Generated" : currentQ.author ? `Added by ${currentQ.author}` : "Jeff's Original"}{currentQ.followUp ? " · Part 1 of 2" : ""}</span>
-                </div>
-                <p className="q-text">{currentQ.text}</p>
-                {currentQ.hint && <div className="q-hint">💡 {currentQ.hint}</div>}
-                <div className="rating-wrap">
-                  {!justRated ? (<>
-                    <p className="rating-lbl">Rate this question</p>
-                    <div className="stars">
-                      {[1, 2, 3, 4, 5].map(n => (
-                        <span key={n} className={`star ${n <= starHover ? "hl" : ""}`}
-                          onMouseEnter={() => setStarHover(n)} onMouseLeave={() => setStarHover(0)}
-                          onClick={() => rateQ(n)}>★</span>
-                      ))}
-                    </div>
-                    {currentRatingCount > 0 && <p className="rating-avg">Avg: {currentRating} ★ · {currentRatingCount} rating{currentRatingCount !== 1 ? "s" : ""}</p>}
-                  </>) : (
-                    <p className="rating-done">Rated! {currentRatingCount} total</p>
-                  )}
-                </div>
-              </div>
-            )}
-            <div className="actions">
-              <button className="btn-ghost" onClick={skipQ}>Skip</button>
-              <button className="btn-gold" style={{ width: "auto" }} onClick={nextQuestion}>Next Question →</button>
-            </div>
-            {amQuestioner && <p style={{ textAlign: "center", fontSize: ".72rem", color: "var(--muted)", marginTop: ".9rem", fontStyle: "italic" }}>You're reading the question aloud. {answerer?.name} answers next.</p>}
-            {amAnswerer && <p style={{ textAlign: "center", fontSize: ".72rem", color: "#e8a0b0", marginTop: ".9rem", fontStyle: "italic" }}>It's your turn to answer — then you become the Questioner.</p>}
-          </div>
-        )}
-
-        {/* SUGGEST A QUESTION MODAL */}
-        {showSuggest && (
-          <div className="overlay" onClick={e => e.target === e.currentTarget && setShowSuggest(false)}>
-            <div className="modal">
-              <button className="modal-close" onClick={() => setShowSuggest(false)}>✕</button>
-              <h2 className="modal-title">Suggest a Question</h2>
-              <p style={{fontSize:".8rem",color:"var(--muted)",marginBottom:"1.2rem",fontStyle:"italic"}}>Your question goes straight into the deck — up next, or close to it. Your name will appear as the source.</p>
-              <div style={{marginBottom:".8rem"}}>
-                <label className="form-lbl">Your Question *</label>
-                <textarea className="form-textarea" style={{minHeight:"80px"}} value={suggestText} onChange={e => setSuggestText(e.target.value)} placeholder="Ask something you've always wanted to know about people…" autoFocus />
-              </div>
-              <div style={{marginBottom:"1.1rem"}}>
-                <label className="form-lbl">Your Name</label>
-                <input className="form-input" value={suggestName} onChange={e => setSuggestName(e.target.value)} placeholder="e.g. Sarah" onKeyDown={e => e.key === "Enter" && submitSuggestion()} />
-              </div>
-              <div style={{display:"flex",gap:".7rem"}}>
-                <button className="btn-gold" style={{width:"auto"}} onClick={submitSuggestion} disabled={!suggestText.trim()}>Add to Deck →</button>
-                <button className="btn-ghost" onClick={() => setShowSuggest(false)}>Cancel</button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* BEAR CAMP MODAL */}
-        {showBearCamp && (
-          <div className="overlay" onClick={e => e.target === e.currentTarget && setShowBearCamp(false)}>
-            <div className="modal">
-              <button className="modal-close" onClick={() => setShowBearCamp(false)}>✕</button>
-              <h2 className="modal-title">Bear Camp</h2>
-              <p style={{fontSize:".82rem",color:"var(--parchment)",marginBottom:"1rem",lineHeight:1.7}}>A private deck of questions made for the trip. Add your own below — they go straight into the deck but stay <em>secret</em>: no one sees them here. They only surface when they come up during a game. Bear Camp can be played solo or as a group, and it alternates one question from the main Ask Questions! deck with one from this Bear Camp deck.</p>
-
-              <div style={{ background: "rgba(200,119,46,.06)", border: "1px solid rgba(200,119,46,.18)", borderRadius: "3px", padding: "1rem", marginBottom: "1.2rem" }}>
-                <div style={{marginBottom:".7rem"}}>
-                  <label className="form-lbl">Your Bear Camp Question *</label>
-                  <textarea className="form-textarea" style={{minHeight:"70px"}} value={bcText} onChange={e => setBcText(e.target.value)} placeholder="Ask something only this crew would understand…" />
-                </div>
-                <div style={{marginBottom:".9rem"}}>
-                  <label className="form-lbl">Your Name</label>
-                  <input className="form-input" value={bcName} onChange={e => setBcName(e.target.value)} placeholder="e.g. Jim" onKeyDown={e => e.key === "Enter" && submitBearCampQuestion()} />
-                </div>
-                <button className="btn-green btn-sm" onClick={submitBearCampQuestion} disabled={!bcText.trim()}>Add to Bear Camp Deck →</button>
-              </div>
-
-              <p style={{fontSize:".75rem",color:"var(--muted)",fontStyle:"italic"}}>Your question is in. It'll stay hidden until it surfaces in a game.</p>
-            </div>
-          </div>
-        )}
-
-        {/* HOW TO PLAY MODAL */}
-        {showInstructions && (
-          <div className="overlay" onClick={e => e.target === e.currentTarget && setShowInstructions(false)}>
-            <div className="modal">
-              <button className="modal-close" onClick={() => setShowInstructions(false)}>✕</button>
-              <h2 className="modal-title">How to Play</h2>
-              <p className="modal-body">{instructionsText}</p>
-            </div>
-          </div>
-        )}
-
-        {/* ABOUT MODAL */}
-        {showAbout && (
-          <div className="overlay" onClick={e => e.target === e.currentTarget && setShowAbout(false)}>
-            <div className="modal">
-              <button className="modal-close" onClick={() => setShowAbout(false)}>✕</button>
-              <h2 className="modal-title">About</h2>
-              <div className="modal-quote">"You know this gives me hope — I really believe this society doesn't know how to converse anymore... the last few dates I've gone on, the guy didn't know a thing about me by the end."</div>
-              <p className="modal-body">{aboutText}</p>
-            </div>
-          </div>
-        )}
-
-        {/* ADMIN MODAL */}
-        {showAdmin && (
-          <div className="overlay" onClick={e => e.target === e.currentTarget && setShowAdmin(false)}>
-            <div className="modal">
-              <button className="modal-close" onClick={() => setShowAdmin(false)}>✕</button>
-              <h2 className="modal-title">Admin Panel</h2>
-              {!adminAuthed ? (
-                <div>
-                  <p style={{ fontSize: ".8rem", color: "var(--muted)", marginBottom: "1rem", fontStyle: "italic" }}>Enter the admin password to continue.</p>
-                  <div style={{ marginBottom: ".8rem" }}>
-                    <label className="form-lbl">Password</label>
-                    <input className="form-input" type="password" value={adminPw} onChange={e => setAdminPw(e.target.value)} onKeyDown={e => e.key === "Enter" && adminLogin()} placeholder="••••••••" />
-                  </div>
-                  {adminError && <p className="err">{adminError}</p>}
-                  <button className="btn-gold" style={{ width: "auto" }} onClick={adminLogin}>Unlock →</button>
-                </div>
-              ) : (<>
-                <div className="tab-bar">
-                  {[["instructions","How to Play"],["about","About"],["questions","Questions"],["bearcamp","Bear Camp"],["bonus","Bonus Q's"],["stats","Insights"],["settings","Settings"]].map(([key, label]) => (
-                    <button key={key} className={`tab ${adminTab === key ? "on" : ""}`} onClick={() => setAdminTab(key)}>{label}</button>
-                  ))}
-                </div>
-
-                {adminTab === "instructions" && (
-                  <div>
-                    <p className="sec-title">Edit "How to Play" Text</p>
-                    <p style={{ fontSize: ".73rem", color: "var(--muted)", marginBottom: ".8rem", fontStyle: "italic" }}>This is what players see when they tap "How to Play."</p>
-                    <textarea className="form-textarea" value={editInstructions} onChange={e => setEditInstructions(e.target.value)} style={{ minHeight: "220px" }} />
-                    <div style={{ display: "flex", gap: ".6rem", marginTop: ".8rem" }}>
-                      <button className="btn-gold btn-sm" onClick={saveInstructions}>Save</button>
-                      <button className="btn-ghost btn-sm" onClick={() => setEditInstructions(instructionsText)}>Reset</button>
-                    </div>
-                  </div>
-                )}
-
-                {adminTab === "about" && (
-                  <div>
-                    <p className="sec-title">Edit About Text</p>
-                    <textarea className="form-textarea" value={editAbout} onChange={e => setEditAbout(e.target.value)} style={{ minHeight: "200px" }} />
-                    <div style={{ display: "flex", gap: ".6rem", marginTop: ".8rem" }}>
-                      <button className="btn-gold btn-sm" onClick={saveAbout}>Save</button>
-                      <button className="btn-ghost btn-sm" onClick={() => setEditAbout(aboutText)}>Reset</button>
-                    </div>
-                  </div>
-                )}
-
-                {adminTab === "questions" && (
-                  <div>
-                    <p className="sec-title">Community Questions ({customQuestions.length})</p>
-                    {!showAddQ ? (
-                      <button className="btn-red btn-sm" style={{ marginBottom: "1rem" }} onClick={() => setShowAddQ(true)}>＋ Add Question</button>
-                    ) : (
-                      <div style={{ background: "rgba(201,146,58,.05)", border: "1px solid rgba(201,146,58,.13)", borderRadius: "3px", padding: "1rem", marginBottom: "1rem" }}>
-                        <div style={{ marginBottom: ".7rem" }}><label className="form-lbl">Question *</label><textarea className="form-textarea" style={{ minHeight: "65px" }} value={newQText} onChange={e => setNewQText(e.target.value)} placeholder="Your question…" /></div>
-                        <div style={{ marginBottom: ".7rem" }}><label className="form-lbl">Hint (optional)</label><input className="form-input" value={newQHint} onChange={e => setNewQHint(e.target.value)} placeholder="Short context or caveat…" /></div>
-                        <div style={{ marginBottom: ".9rem" }}><label className="form-lbl">Author</label><input className="form-input" value={newQAuthor} onChange={e => setNewQAuthor(e.target.value)} placeholder="e.g. Sarah" /></div>
-                        <div style={{ display: "flex", gap: ".6rem" }}>
-                          <button className="btn-gold btn-sm" onClick={addCustomQ}>Add</button>
-                          <button className="btn-ghost btn-sm" onClick={() => setShowAddQ(false)}>Cancel</button>
-                        </div>
-                      </div>
-                    )}
-                    {customQuestions.length === 0 && <p className="empty">No community questions yet.</p>}
-                    {customQuestions.map(q => editQ?.id === q.id ? (
-                      <div key={q.id} style={{ background: "rgba(201,146,58,.05)", border: "1px solid rgba(201,146,58,.18)", borderRadius: "3px", padding: ".85rem", marginBottom: ".6rem" }}>
-                        <div style={{ marginBottom: ".6rem" }}><label className="form-lbl">Question</label><textarea className="form-textarea" style={{ minHeight: "60px" }} value={editQ.text} onChange={e => setEditQ({ ...editQ, text: e.target.value })} /></div>
-                        <div style={{ marginBottom: ".6rem" }}><label className="form-lbl">Hint</label><input className="form-input" value={editQ.hint || ""} onChange={e => setEditQ({ ...editQ, hint: e.target.value || null })} /></div>
-                        <div style={{ marginBottom: ".8rem" }}><label className="form-lbl">Author</label><input className="form-input" value={editQ.author || ""} onChange={e => setEditQ({ ...editQ, author: e.target.value })} /></div>
-                        <div style={{ display: "flex", gap: ".6rem" }}><button className="btn-gold btn-sm" onClick={saveEditQ}>Save</button><button className="btn-ghost btn-sm" onClick={() => setEditQ(null)}>Cancel</button></div>
-                      </div>
-                    ) : (
-                      <div key={q.id} className="q-row">
-                        <div style={{ flex: 1 }}><p className="q-row-text">{q.text}</p><p className="q-row-meta">by {q.author}{getAvgRating(q.id) ? ` · ${getAvgRating(q.id)} ★` : " · unrated"}</p></div>
-                        <div style={{ display: "flex", gap: ".3rem" }}><button className="icon-btn" onClick={() => setEditQ({ ...q })}>✎</button><button className="icon-btn del" onClick={() => deleteCustomQ(q.id)}>✕</button></div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {adminTab === "bearcamp" && (
-                  <div>
-                    <p className="sec-title">Bear Camp Deck ({bearCampQ.length})</p>
-                    <p className="ai-note">{BEAR_CAMP_SEED.length} preloaded questions plus anything the crew adds. During a Bear Camp game the app alternates one main-deck question and one Bear Camp question. Anyone can add via the Bear Camp button; preloaded questions can't be removed, but added ones can.</p>
-                    <div style={{ background: "rgba(200,119,46,.06)", border: "1px solid rgba(200,119,46,.18)", borderRadius: "3px", padding: "1rem", marginBottom: "1rem" }}>
-                      <div style={{ marginBottom: ".7rem" }}><label className="form-lbl">Question *</label><textarea className="form-textarea" style={{ minHeight: "60px" }} value={bcText} onChange={e => setBcText(e.target.value)} placeholder="Add a Bear Camp question…" /></div>
-                      <div style={{ marginBottom: ".9rem" }}><label className="form-lbl">Author</label><input className="form-input" value={bcName} onChange={e => setBcName(e.target.value)} placeholder="e.g. Jim" /></div>
-                      <button className="btn-green btn-sm" onClick={submitBearCampQuestion} disabled={!bcText.trim()}>Add</button>
-                    </div>
-                    {bearCampQ.map(q => (
-                      <div key={q.id} className="q-row">
-                        <div style={{ flex: 1 }}>
-                          <p className="q-row-text">{q.text}</p>
-                          <p className="q-row-meta">{q.author ? `by ${q.author}` : "preloaded"}{q.custom ? "" : " · seed"}</p>
-                        </div>
-                        {q.custom && <button className="icon-btn del" onClick={() => { if (window.confirm("Remove this Bear Camp question?")) deleteBearCampQ(q.id); }}>✕</button>}
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {adminTab === "bonus" && (
-                  <div>
-                    <p className="sec-title">Bonus Questions ({BONUS_QUESTIONS.length})</p>
-                    <p className="ai-note">25 curated bonus questions in the spirit of Jeff's originals — always active and mixed into the deck. Highly rated questions come up more often; frequently skipped ones fade into the background.</p>
-                    <div className="hr" />
-                    {BONUS_QUESTIONS.map(q => (
-                      <div key={q.id} className="q-row">
-                        <div style={{ flex: 1 }}>
-                          <p className="q-row-text">{q.text}</p>
-                          {q.hint && <p className="q-row-meta">💡 {q.hint}</p>}
-                          <p className="q-row-meta">{getAvgRating(q.id) ? `${getAvgRating(q.id)} ★ · ${ratings[q.id]?.count || 0} ratings` : "unrated"}</p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {adminTab === "stats" && (
-                  <div>
-                    <p className="sec-title">Top Rated</p>
-                    {allQ.filter(q => ratings[q.id]?.count > 0).sort((a, b) => (ratings[b.id].total / ratings[b.id].count) - (ratings[a.id].total / ratings[a.id].count)).slice(0, 8).map(q => (
-                      <div key={q.id} className="stat-row"><span style={{ flex: 1, fontSize: ".76rem" }}>{q.text.slice(0, 85)}{q.text.length > 85 ? "…" : ""}</span><span className="stat-badge">{getAvgRating(q.id)} ★ · {ratings[q.id].count}</span></div>
-                    ))}
-                    {allQ.filter(q => ratings[q.id]?.count > 0).length === 0 && <p className="empty">No ratings yet.</p>}
-                    <div className="hr" />
-                    <p className="sec-title">Most Skipped</p>
-                    {allQ.filter(q => (ratings[q.id]?.skips || 0) > 0).sort((a, b) => (ratings[b.id]?.skips || 0) - (ratings[a.id]?.skips || 0)).slice(0, 5).map(q => (
-                      <div key={q.id} className="stat-row"><span style={{ flex: 1, fontSize: ".76rem" }}>{q.text.slice(0, 85)}{q.text.length > 85 ? "…" : ""}</span><span className="stat-badge">{ratings[q.id]?.skips} skips</span></div>
-                    ))}
-                    {allQ.filter(q => (ratings[q.id]?.skips || 0) > 0).length === 0 && <p className="empty">No skips recorded yet.</p>}
-                  </div>
-                )}
-
-                {adminTab === "settings" && (
-                  <div>
-                    <p className="sec-title">Change Admin Password</p>
-                    <p style={{ fontSize: ".73rem", color: "var(--muted)", marginBottom: ".7rem", fontStyle: "italic" }}>Stored locally on this device only.</p>
-                    <div style={{ marginBottom: ".8rem" }}><label className="form-lbl">New Password</label><input className="form-input" type="password" value={adminPwNew} onChange={e => setAdminPwNew(e.target.value)} placeholder="Enter new password" /></div>
-                    <button className="btn-red btn-sm" onClick={() => { ls_set(ADMIN_PW_KEY, adminPwNew); showToast("Password updated!"); setAdminPwNew(""); }} disabled={!adminPwNew.trim()}>Update Password</button>
-                    <div className="hr" />
-                    <p className="sec-title">Game Management</p>
-                    <p style={{ fontSize: ".75rem", color: "var(--muted)", marginBottom: ".7rem", fontStyle: "italic" }}>Use at end of the night to reset for next time.</p>
-                    <div style={{ display: "flex", gap: ".6rem", flexWrap: "wrap" }}>
-                      <button className="btn-ghost btn-sm" onClick={() => {
-                        if (window.confirm("Are you sure you want to remove ALL players? This cannot be undone.")) {
-                          fbSet("players", null); fbSet("gameState", null); showToast("Players cleared.");
-                        }
-                      }}>Clear All Players</button>
-                      <button className="btn-ghost btn-sm" onClick={() => {
-                        if (window.confirm("Are you sure you want to delete ALL ratings? This cannot be undone.")) {
-                          fbSet("ratings", null); showToast("Ratings cleared.");
-                        }
-                      }}>Clear All Ratings</button>
-                      <button className="btn-ghost btn-sm" onClick={() => {
-                        if (window.confirm("Are you sure you want to delete ALL community questions? This cannot be undone.")) {
-                          fbSet("customQuestions", null); fbSet("pendingSuggestions", null); showToast("Community questions cleared.");
-                        }
-                      }}>Clear Community Questions</button>
-                    </div>
-                  </div>
-                )}
-              </>)}
-            </div>
-          </div>
-        )}
-      </div>
-    </>
-  );
-}
+export const JEFF_QUESTIONS = [
+  { id: 1, text: "What is the greatest claim to fame of anyone in your family history?", hint: null },
+  { id: 2, text: "Fill in the blank: I make my bed ______ times a week.", hint: null },
+  { id: 3, text: "If my significant other were a superhero, he/she would be ___________.", hint: "Ant-Man, Aquaman, Batman, Captain America, Captain Marvel, Catwoman, Green Lantern, Incredible Hulk, Iron Man, Robin, Spider-Man, Supergirl, Superman, Wonder Woman... If no significant other, answer for a friend or family member." },
+  { id: 4, text: "Would you rather be a plumber or an electrician?", hint: null },
+  { id: 5, text: "Would you rather continue your sleeping habits right now or never have to sleep again (with no ill effects)?", hint: null },
+  { id: 6, followUp: 7, text: "If you had to add one hour a day to your TV watching, would you choose: the movie channel, CNN, ESPN, or the comedy channel?", hint: null },
+  { id: 7, text: "What if you were only allowed to watch one hour of TV total — which of those would it be?", hint: null },
+  { id: 8, followUp: "b26", text: "Did O.J. do it?", hint: null },
+  { id: 9, text: "Would you rather eat 6 raw eggs or 1 tennis ball-sized raw onion in 5 minutes?", hint: "Would your answer change if you had to do this every day for a month?" },
+  { id: 10, text: "Would you rather spend 10 hours on a plane in first class (destination is your starting point) or 10 hours in your kitchen without being allowed to leave?", hint: "If you need to use the bathroom during the kitchen option, you'd have to do so in the kitchen." },
+  { id: 11, text: "Where were you when you learned what happened on 9/11? Do you know anyone who perished?", hint: null },
+  { id: 12, text: "If you were a car, what kind of car do you think other people would expect you to be?", hint: "This is about personality. If it takes you ten minutes to order dinner, no one thinks you're a Ferrari." },
+  { id: 13, text: "If you were given $100,000 that HAD to be spent on either a speedboat or sailboat — which would it be?", hint: null },
+  { id: 14, text: "If you could live to be 75 in perfect health and then pass away on your 75th birthday, or accept whatever God's current plan may be — which would you choose?", hint: "You may want to adjust the age depending on your audience." },
+  { id: 15, text: "On a Saturday, would you rather do 8 hours of yard work or 8 hours of house cleaning?", hint: "It's 90 degrees outside. What if it were 45 degrees?" },
+  { id: 16, text: "What is the most expensive meal you have ever had?", hint: null },
+  { id: 17, text: "How many times do you use a towel before you wash it?", hint: null },
+  { id: 18, text: "Finish this sentence: The one appliance in my house I would replace if it were free is ___________.", hint: "You get $5,000 to use. If you only spend $1,000, you keep the rest." },
+  { id: 19, text: "Would you rather your child grow up to be a controversial and famous rock star, or a good and dependable nurse?", hint: null },
+  { id: 20, text: "What is the weirdest tradition of your significant other's family?", hint: "If no significant other, answer for a friend or family member." },
+  { id: 21, text: "What is currently the biggest sibling squabble among your siblings?", hint: "If an only child, answer for your broader family — parents, cousins, etc." },
+  { id: 22, text: "What are three words that best describe your mom or dad?", hint: null },
+  { id: 23, followUp: 24, text: "If the Presidency was chosen by lottery and you knew you would get the winning ticket — would you go get it?", hint: "Six-year term, cannot be re-elected, you'd have to move to Washington DC, everything else about the Presidency applies." },
+  { id: 24, text: "Same question as above but for a Senate seat.", hint: null },
+  { id: 25, text: "Is there anything you would never, ever, ever tell your mom or dad?", hint: null },
+  { id: 26, text: "Finish this sentence: My mom/dad would weep if they knew I had _______.", hint: "Perhaps skip if your mom or dad is present... or finish it with 'always loved them more than life itself.'" },
+  { id: 27, text: "Where is your favorite place to shop?", hint: null },
+  { id: 28, text: "Do you prefer sun or shade?", hint: null },
+  { id: 29, text: "What is your favorite indoor temperature? Outdoor temperature?", hint: null },
+  { id: 30, text: "Do you know anyone who died in war?", hint: null },
+  { id: 31, text: "Who will look better in 10 years — you or your significant other?", hint: null },
+  { id: 32, text: "Would you rather jump off a 60-foot cliff into deep water, or bungee jump 200 feet over a cornfield?", hint: null },
+  { id: 33, text: "Would you rather run naked for 15 minutes in your front yard at noon on Saturday, or get a crew cut?", hint: "What if it was your backyard? Men would have to shave their heads." },
+  { id: 34, text: "Finish this sentence: The weirdest thing about my significant other's family is ___________.", hint: null },
+  { id: 35, text: "Would you rather spend $500 in a grocery store, a sporting goods store, or a clothing store?", hint: null },
+  { id: 36, text: "Finish this sentence: If I were given $100,000 to renovate my house, I would use it for ___________.", hint: "Could be a room, landscaping, basement, addition, etc." },
+  { id: 37, text: "How many TVs are in your house?", hint: null },
+  { id: 38, text: "What foreign languages do you speak?", hint: "Did you ever live somewhere where that was the language?" },
+  { id: 39, text: "How many CDs do you own? DVDs?", hint: null },
+  { id: 40, text: "Would you rather eat 10 hot dogs in one day, or not eat a single hot dog for 10 years?", hint: "If you eat the 10, you can eat hot dogs whenever you want for the next 10 years. Otherwise, no dogs for you." },
+  { id: 41, text: "Finish this sentence: My significant other is better than anyone I know at ___________.", hint: "Consider throwing in a 'let's keep it PG-13.'" },
+  { id: 42, text: "How much would someone have to offer you to buy your house if they knocked on your door today and you had to move within 72 hours?", hint: "How about if they gave you two weeks?" },
+  { id: 43, text: "Complete this sentence: Although they maybe wouldn't admit it, I think my parent's dream for me may have been ___________.", hint: null },
+  { id: 44, text: "Answer this sentence: Although I may not tell them this, my dream for my child is ___________.", hint: "Name which child if you have more than one." },
+  { id: 45, text: "What is the weirdest thing you have ever been paid for?", hint: null },
+  { id: 46, text: "If you had to spend $5,000 on improving your home and it could only be painting or carpet — which is it?", hint: null },
+  { id: 47, text: "How much would I have to pay you right now for your computer? You would not be allowed to back anything up.", hint: "Whatever is on it will be wiped before being sold." },
+  { id: 48, text: "What is the most valuable thing you have ever lost or that has been stolen?", hint: null },
+  { id: 49, text: "For one month you get one of the following — which do you choose: a personal chef (one meal for your home 3x a week), a housecleaner (4 hours 3x a week), or a massage therapist (two 60-minute massages a week)?", hint: "None are transferable to people outside your home." },
+  { id: 50, text: "What is the one bill that makes you cringe when you see it?", hint: null },
+  { id: 51, text: "How much time do you spend reading the news each week?", hint: null },
+  { id: 52, text: "What is your favorite TV series currently? Of all time?", hint: null },
+  { id: 53, text: "Finish this sentence: My significant other would say that I am better than anyone she/he knows at ___________.", hint: null },
+  { id: 54, text: "Your friends say — 'the weirdest thing about you is _________.'", hint: null },
+  { id: 55, text: "The one thing in my house that I have organized is ___________.", hint: null },
+  { id: 56, text: "Finish this sentence: If I had to leave for a formal dinner party starting at 7:00 pm (30 minutes away), I would begin getting ready at ___________.", hint: null },
+  { id: 57, text: "How much do you spend a year on hair care — coloring, shampoo, haircuts?", hint: null },
+  { id: 58, text: "What is the greatest contribution to society from anyone in your family history?", hint: null },
+  { id: 59, text: "If you had to spend 3 hours a day for the next 3 months doing one of the following, which would it be: learning a foreign language, working out, doing volunteer work, or watching the history channel?", hint: null },
+  { id: 60, text: "How much time do you spend cleaning the house a week?", hint: "Includes dishes but not laundry." },
+  { id: 61, text: "How many books do you read a year? Fiction or non-fiction?", hint: null },
+  { id: 62, text: "How many pages of text do you type a year — including everything, email, etc.?", hint: "One page = 30 lines single spaced." },
+  { id: 63, text: "How long is your average shower?", hint: null },
+  { id: 64, text: "Have you ever been on a blind date?", hint: null },
+  { id: 65, text: "If you were a professional athlete, what sport? (You'd get paid the same no matter what.)", hint: null },
+  { id: 66, text: "One thing I do not need to buy for a long time is ___________.", hint: null },
+  { id: 67, text: "If you were in the Olympics, what event?", hint: null },
+  { id: 68, text: "If you could go back in time and give your younger self advice, what would it be?", hint: "Take your age and cut it in half. What would you tell that version of yourself?" },
+  { id: 69, text: "Would you rather be a professional athlete (a starter, but not a superstar) or win a gold medal in the Olympics?", hint: null },
+  { id: 70, text: "What would you like your ideal commute to be? What is your preferred mode of transportation?", hint: null },
+  { id: 71, text: "What is the dumbest thing you have ever said?", hint: null },
+  { id: 72, text: "Do you support the death penalty?", hint: "Heads up: if you are with opinionated people, this could become the last question of the evening." },
+  { id: 73, text: "If you have traveled frequently: 'I hate to generalize, but I have traveled a lot and one thing I have found about ___________ is ___________.'" , hint: null },
+  { id: 74, text: "Fill in the blanks: 'I hate to generalize, but I have traveled a lot and one thing I have found about ___________ is ___________.'" , hint: null },
+  { id: 75, text: "Finish this sentence: I wish I could change _______ about my significant other.", hint: "Be very careful." },
+  { id: 76, text: "Finish this sentence: On average, I eat out ______ times a week.", hint: null },
+  { id: 77, text: "Have you ever had a recurring dream? What is it?", hint: null },
+  { id: 78, text: "What is your favorite meal: breakfast, lunch, or dinner?", hint: null },
+  { id: 79, text: "Finish this sentence: My worst habit is ___________.", hint: null },
+  { id: 80, text: "English or Math?", hint: null },
+  { id: 81, text: "What was your first fight with your spouse?", hint: null },
+  { id: 82, text: "Your significant other will say your worst habit is ___________.", hint: null },
+  { id: 83, text: "How many jobs have you had since college? What was your shortest tenure?", hint: null },
+  { id: 84, text: "If it cost you $10 an hour to watch TV, how much would you watch compared to now?", hint: "What about $20 an hour?" },
+  { id: 85, text: "How much would you have to be offered to immediately give up your entire wardrobe?", hint: "You can keep one item. Everything else — shoes, t-shirts, everything — is included. Sportswear like golf shoes and skis are exempt." },
+  { id: 86, text: "How many times a week is each of the following done in your home — and are you the one who does it: garbage emptied, dishwasher emptied, laundry?", hint: null },
+  { id: 87, text: "How many places have you lived in your life (where you stayed more than one month)?", hint: null },
+  { id: 88, text: "The thing you most like about your physical self is?", hint: null },
+  { id: 89, text: "Is there anyone who you feel imitates you — what you do, what you wear, places you go on vacation, etc.?", hint: null },
+  { id: 90, text: "If we went into your closet and pulled out every piece of clothing you haven't worn in the past 12 months, how many pieces would we have? What percentage of your wardrobe is that?", hint: null },
+  { id: 91, text: "If there is one thing about your physical self you could change, what would it be?", hint: null },
+  { id: 92, text: "Complete this sentence: If I had to get a tattoo (or another one) I would get a _______ on my _______.", hint: "Consider lying." },
+  { id: 93, text: "What is the largest number of people you have ever spoken in front of?", hint: null },
+  { id: 94, text: "Approximately how many countries have you visited (at least one night)? How many have you lived in?", hint: null },
+  { id: 95, text: "If you had to live in a different state than the one you're in now, where would you go?", hint: null },
+  { id: 96, text: "Would you rather have 3 dogs and 1 hamster, or 6 hamsters, 1 cat, and 1 dog?", hint: "Assume the cat and dog get along... but the hamsters fight." },
+  { id: 97, text: "Do you prefer Coke or Pepsi?", hint: null },
+  { id: 98, text: "What is the hardest thing you have ever done?", hint: null },
+  { id: 99, text: "What is the longest time you have gone without showering? Why?", hint: null },
+  { id: 100, text: "How many pillows do you sleep with?", hint: null },
+  { id: 101, text: "On average, how long does it take you to fall asleep?", hint: null },
+  { id: 102, text: "On average, how many times a year do you go to a doctor? A dentist?", hint: null },
+  { id: 103, text: "How many miles do you drive a year?", hint: null },
+  { id: 104, text: "Do you have a most prized possession?", hint: null },
+  { id: 105, text: "How many times a month do you weigh yourself?", hint: null },
+  { id: 106, text: "How fast can you type (words per minute)?", hint: null },
+  { id: 107, text: "The biggest misconception about me is ___________.", hint: null },
+  { id: 108, text: "What was your favorite subject in school (K-8)? In high school?", hint: null },
+  { id: 109, text: "What is one aspiration or goal by age 40? 50? Before you die?", hint: null },
+  { id: 110, text: "Which have you owned more of in your life — wallets or purses?", hint: null },
+  { id: 111, text: "How many phone numbers do you have memorized?", hint: null },
+  { id: 112, text: "What is the last major purchase that you regret?", hint: null },
+  { id: 113, text: "Who is your favorite dwarf from Snow White and the Seven Dwarfs? Can you name all 7?", hint: null },
+  { id: 114, text: "As a child, did you go away to camp? Have you been to a camp as an adult?", hint: null },
+  { id: 115, text: "What is your preferred brand of toothpaste?", hint: null },
+  { id: 116, text: "Describe your first date.", hint: null },
+  { id: 117, text: "When was your first kiss with your significant other?", hint: "Be sure you have this one right, or excuse yourself until your turn has passed." },
+  { id: 119, text: "The one person you regret having not asked out was?", hint: null },
+  { id: 120, text: "Describe your worst date.", hint: null },
+  { id: 121, text: "Finish this sentence: Taxes in this country are ___________.", hint: "If you are with controversial people, skip this one." },
+  { id: 122, text: "If you could only have 2 things stranded on a desert island, what would they be?", hint: null },
+  { id: 123, text: "Of all the people you know, who would best survive if dropped on a deserted island?", hint: null },
+  { id: 124, text: "Who is the oldest living person you know?", hint: null },
+  { id: 125, text: "Do you think it is harder to become a doctor or a lawyer?", hint: null },
+  { id: 126, text: "What profession do you think should require more training, or should be harder to get a license or degree for?", hint: null },
+  { id: 127, text: "Do you think man has been on the moon?", hint: null },
+  { id: 128, text: "Name 2 pet peeves of your spouse. (Not necessarily about you.)", hint: null },
+  { id: 129, text: "How many magazines do you subscribe to?", hint: null },
+  { id: 130, text: "If you had to live in a foreign country for 5 years, which would you choose? You cannot leave the entire time.", hint: "Your job, housing, and schooling would all be equivalent to your current situation." },
+  { id: 131, text: "Did Michael Jackson do it? (Define 'it' however you wish.)", hint: null },
+  { id: 132, text: "Finish this sentence: The one occupation that is just underpaid in this country is ___________.", hint: null },
+  { id: 133, text: "Can you name every state that begins with the letters A, M, or T?", hint: null },
+  { id: 134, text: "What was the last thing you read or heard in the news that upset you?", hint: null },
+  { id: 135, text: "Who is the most famous person you've ever had a relationship with?", hint: null },
+  { id: 136, text: "Do you know anyone who has committed a major crime and gotten away with it?", hint: null },
+  { id: 137, text: "Do you know anyone currently serving time? Have you ever spent a night in jail?", hint: null },
+  { id: 138, text: "Do you know anyone who is doing exactly what they want to do with their life? Do you want to kill that person?", hint: null },
+  { id: 139, text: "How many people did you know who passed away before age 20? Before 40?", hint: null },
+  { id: 140, text: "Who is the most famous or successful person who graduated from your high school class?", hint: "Did you think they'd be that successful? Do you wish they got a tax audit?" },
+  { id: 141, text: "Do you consider yourself a jealous person?", hint: null },
+  { id: 142, text: "Who is the most annoying person you know and why?", hint: "First name only is fine. If you're having dinner with that person, use an alias." },
+  { id: 143, text: "Is there anyone with whom you are not on speaking terms?", hint: "Always a bad question if the person's answer is in the room." },
+  { id: 144, text: "Is there anyone whom you used to speak with every day (for at least a year) who you haven't spoken with in several years?", hint: "I thought so." },
+  { id: 145, text: "Do you know anyone who had a near-death experience?", hint: null },
+  { id: 146, text: "What is the closest to death you have ever been?", hint: null },
+  { id: 147, text: "If you could change one law, what would it be? Would your answer change if it became publicly known?", hint: null },
+  { id: 148, followUp: 149, text: "How many countries have you been to?", hint: null },
+  { id: 149, text: "How many countries do you think there are in the world?", hint: "The answer is 195." },
+  { id: 150, text: "If you could only eat one meal for a month (as much and as often as you wanted), what would it be?", hint: "If you say something with variety, be specific — not just 'pizza,' but which kind." },
+  { id: 151, text: "What is the approximate number of stitches you have had in your life?", hint: null },
+  { id: 152, text: "Who is on the ten-dollar bill?", hint: null },
+  { id: 153, text: "What is something you have memorized that most people don't?", hint: null },
+  { id: 154, text: "What is the name of your 3rd-grade teacher? What were they like?", hint: null },
+  { id: 155, text: "What is your first memory?", hint: null },
+  { id: 156, text: "What is the first time you remember your parents being proud of you?", hint: "If this still has not occurred, you may want to write Dear Abby." },
+  { id: 157, text: "When was the last time you had aspirin for a headache or another ache?", hint: null },
+  { id: 158, text: "When was the last time you did NOT take aspirin for a headache? Has the aspirin talk made you realize you need one now?", hint: null },
+  { id: 159, text: "For what reason were you grounded for the first time?", hint: null },
+  { id: 160, text: "What is the most pain you have ever been in?", hint: null },
+  { id: 161, text: "What is the biggest fear you have for your children, or for children in general?", hint: null },
+  { id: 162, text: "How many operations have you had?", hint: null },
+  { id: 163, text: "Have you ever met a President? Was he the acting President when you met him?", hint: null },
+  { id: 164, text: "Who was President when you were born?", hint: null },
+  { id: 165, text: "Have you ever had fire damage to your property?", hint: null },
+  { id: 166, text: "If you had to do one of the below for 6 months with no vacation, which would you choose: Cruise Director (4 days/week, 12-hour days, at sea with a 3-day port stop every 6 weeks), Flight Attendant (4-day international trips every 10 days), or Local Train Operator (6 days/week, 8 hours/day)?", hint: null },
+  { id: 167, text: "Have you ever been mugged?", hint: null },
+  { id: 168, text: "Women: How many times have you been formally proposed to? Men: How many times have you formally proposed?", hint: "This can be a touchy subject, so tread carefully." },
+  { id: 169, text: "How many addresses have you had in your life (places where you lived more than 2 months)?", hint: null },
+  { id: 170, text: "A neighbor asks you to watch their dog. You never hear from them and they return a year later wanting the dog back. Do you give it back?", hint: "You and your family have grown very fond of the dog." },
+  { id: 171, text: "What is the biggest tip you have ever given anyone?", hint: null },
+  { id: 172, text: "Have you ever been in a feud with a neighbor?", hint: null },
+  { id: 173, text: "Can you remember your last home phone number?", hint: null },
+  { id: 174, text: "What is the greatest favor or act of kindness you have ever done for someone?", hint: "It needs to be specific." },
+  { id: 175, text: "Do you have a favorite cartoon? What is it?", hint: null },
+  { id: 176, text: "What is your most memorable family vacation?", hint: null },
+  { id: 177, text: "What family traditions do you currently plan to continue or discontinue?", hint: null },
+  { id: 178, text: "What is your favorite dessert?", hint: null },
+  { id: 179, text: "Have you ever published anything?", hint: null },
+  { id: 180, text: "What was your most difficult class in high school?", hint: null },
+  { id: 181, text: "How many F's did you get in college? How many D's?", hint: null },
+  { id: 182, text: "Did you ever cheat on a test? Did you ever get caught?", hint: null },
+  { id: 183, text: "Have you ever changed a car tire? Would you know how?", hint: null },
+  { id: 184, text: "Which of the following can you NOT confidently do: ride a horse, sail, knit or sew, tie a bow tie, drive a motorcycle, drive a stick shift, or rollerblade?", hint: null },
+  { id: 185, text: "How many watches do you own? How many are currently working? How many do you actively wear?", hint: null },
+  { id: 186, text: "If you could only drink one type of drink for a month (in addition to water), what would it be?", hint: "Be specific — if wine, what kind?" },
+  { id: 187, text: "How many car accidents have you been in?", hint: null },
+  { id: 188, text: "When were you in the best shape of your life? What could you do that makes you believe that was your peak?", hint: null },
+  { id: 189, text: "Did you have a car when you were 16? Who bought it?", hint: null },
+  { id: 190, text: "How many cars have you had in your life?", hint: null },
+  { id: 191, text: "What was your first purchase over $1,000?", hint: null },
+  { id: 192, text: "How many people do you currently know who are looking for a job?", hint: null },
+  { id: 193, text: "Do you have a current resume?", hint: null },
+  { id: 194, text: "How many pairs of shoes do you own? Not including athletic shoes.", hint: null },
+  { id: 195, text: "Do you like fireworks?", hint: null },
+  { id: 196, followUp: 197, text: "Which of the following have you done: skydived, bungee jumped, scuba dived, parasailed, or hang glided?", hint: null },
+  { id: 197, text: "Which of those did you like best? Any you would not do again?", hint: null },
+  { id: 198, text: "Have you ever been in a helicopter?", hint: null },
+  { id: 199, text: "Have you ever been on television?", hint: null },
+  { id: 200, text: "What books have you read more than once?", hint: null },
+  { id: 201, text: "Do you know your blood type?", hint: null },
+  { id: 202, text: "Have you ever missed a flight?", hint: null },
+  { id: 203, text: "What nicknames have you had in your life?", hint: null },
+  { id: 204, text: "Have you ever yelled at a stranger?", hint: null },
+  { id: 205, text: "Have you ever been a part of or witnessed road rage?", hint: null },
+  { id: 206, text: "Have you ever witnessed a crime? Did you report it?", hint: null },
+  { id: 207, text: "Have you ever been in a fight where punches were thrown?", hint: null },
+  { id: 208, text: "What city did you live in when you were 5, 19, and 25?", hint: "This one often creates surprising connections between people at the table." },
+  { id: 209, text: "Have you ever saved anyone's life?", hint: null },
+  { id: 210, text: "What TV character can you most identify with?", hint: null },
+  { id: 211, text: "People say — 'you look like ___________.'", hint: null },
+  { id: 212, text: "Have you ever been on a blind date?", hint: null },
+  { id: 213, text: "Have you ever been bitten by an animal?", hint: null },
+  { id: 214, text: "What is the longest you've ever been without going outside?", hint: null },
+  { id: 215, text: "What is the longest you have ever gone without going inside?", hint: null },
+  { id: 216, text: "Do you own a tent?", hint: null },
+  { id: 217, text: "Have you ever built anything significant — physically built?", hint: null },
+  { id: 218, text: "How many showers do you take a week?", hint: null },
+  { id: 219, text: "If you had to pursue one occupation for 10 years at $50K working 20 hours a week, which would you choose: Auctioneer, Schoolmaster, Stenographer, or Alderman?", hint: null },
+  { id: 220, text: "Same deal at $110K for 30 hours a week: Falconer, Beekeeper, Tavern Keeper, or Inn Keeper?", hint: null },
+  { id: 221, text: "Same deal at $125K for 40 hours a week: Mason, Warden, Lumberman, or Oxen Driver?", hint: null },
+  { id: 222, text: "Same deal at $250K for 50 hours a week with 50% travel: Ship Shanty Leader, Body Preparer for Burial, Balloonist, or Traveling Merchant?", hint: null },
+  { id: 223, text: "If your occupation had to be randomly drawn from one of those four groups — which group would you choose?", hint: null },
+  { id: 224, text: "What is your greatest athletic feat?", hint: null },
+  { id: 225, text: "Why do you live where you live?", hint: null },
+  { id: 226, text: "What is the first movie you ever saw in a movie theatre?", hint: null },
+  { id: 227, text: "What was your first public speaking experience? How did it go?", hint: null },
+  { id: 228, text: "What is the name of your freshman year college roommate? What are they doing today?", hint: null },
+  { id: 229, text: "Have you ever fired anyone? Have you ever been fired?", hint: null },
+  { id: 230, text: "Have you ever been on TV?", hint: null },
+  { id: 231, text: "Have you ever been written about or quoted in the paper?", hint: null },
+  { id: 232, text: "In high school, what three adjectives described you? In college? Today?", hint: null },
+  { id: 233, text: "Do you have any friends whose occupation is a talent — professional athlete, entertainer, etc.?", hint: null },
+  { id: 234, text: "What is your favorite reality TV show? If you had to be on one, which would you choose?", hint: null },
+  { id: 235, text: "Who has been the most influential person in your life, ever? Today?", hint: null },
+  { id: 236, text: "Can you play a musical instrument?", hint: null },
+  { id: 237, text: "Have you ever auditioned for anything?", hint: null },
+  { id: 238, text: "Who is your favorite entertainer?", hint: null },
+  { id: 239, text: "What is your favorite vegetable?", hint: null },
+  { id: 240, text: "What TV programs will you stay home to watch?", hint: null },
+  { id: 241, text: "What is your preferred source of news — internet, paper, TV, or radio?", hint: null },
+  { id: 242, text: "What is the biggest difference between who you are today and who you were half your years ago?", hint: null },
+  { id: 243, text: "What is your greatest fear?", hint: null },
+  { id: 244, text: "Have you ever seen a tornado?", hint: null },
+  { id: 245, text: "Have you ever been on a private plane?", hint: null },
+  { id: 246, text: "What is your favorite movie line?", hint: null },
+  { id: 247, text: "How many very close friends do you have?", hint: null },
+  { id: 248, text: "What was your best investment? Worst?", hint: null },
+  { id: 249, text: "If you could give $1,000,000 to a single charity, which would it be?", hint: null },
+  { id: 250, text: "What is your favorite season — spring, summer, winter, or fall?", hint: null },
+  { id: 251, text: "What is your favorite holiday?", hint: null },
+  { id: 252, text: "How many servings of something sweet — candy, dessert, etc. — do you eat a week?", hint: null },
+  { id: 253, text: "How often do you exercise?", hint: null },
+  { id: 254, text: "What do you think is the worst invention of the past 25 years? What is the best?", hint: null },
+  { id: 255, text: "What is the greatest sporting event you have ever seen live?", hint: null },
+  { id: 256, text: "Have you ever had a crush on a teacher or instructor? Did you do anything about it?", hint: null },
+  { id: 257, text: "What associations, organizations, and clubs do you belong to?", hint: null },
+  { id: 258, text: "Fill in this blank: If I ran for public office, I would have a hard time getting the ___________ vote.", hint: null },
+  { id: 259, text: "Is there anyone you almost married?", hint: null },
+  { id: 260, text: "Fill in this blank: I have so much of ___________, I won't run out of it for a long, long time.", hint: null },
+  { id: 261, text: "Have you ever had a religious experience?", hint: null },
+  { id: 262, text: "How many computers are in your home?", hint: null },
+  { id: 263, text: "Have you ever seen a streaker? Have you ever been one?", hint: null },
+  { id: 264, text: "Have you ever called into work 'sick' when you weren't?", hint: null },
+  { id: 265, text: "How much time do you spend each week cooking?", hint: null },
+  { id: 266, text: "How many times do you get your car washed a year?", hint: null },
+  { id: 267, text: "Do you have any addictions?", hint: null },
+  { id: 268, text: "How many hairstyles have you had in your life? How many hair colors?", hint: null },
+  { id: 269, text: "How many schools have you attended?", hint: null },
+  { id: 270, text: "Have you ever won a contest?", hint: null },
+  { id: 271, text: "Have you ever won a raffle or a prize?", hint: null },
+  { id: 272, text: "If you had to be a teacher, what subject would you teach to what grade?", hint: null },
+  { id: 273, text: "Have you ever helped a stranger for more than a few minutes? If so, with what?", hint: null },
+  { id: 274, text: "Would you prefer to live in a place where it is daylight 23 hours a day or only 6 hours a day?", hint: null },
+  { id: 275, text: "What is something that is currently legal that you think should be illegal?", hint: null },
+  { id: 276, text: "How would you finish this sentence: I was the last one I know to buy/adopt/begin ___________.", hint: null },
+  { id: 277, text: "If you had to change your first name to something else, what would it be?", hint: null },
+  { id: 278, text: "How many people do you know that have the same first name as you? Do you think they represent your name well?", hint: null },
+  { id: 279, text: "What person, place, or thing is at the center of your life?", hint: null },
+  { id: 280, text: "Do you know how much money is in your wallet right now?", hint: null },
+  { id: 281, text: "Is there a place or time when you do your best thinking?", hint: null },
+  { id: 282, text: "Is there any profession that you wish required wearing a uniform so you'd know who they were?", hint: null },
+  { id: 283, text: "What physical attribute do you like most about yourself? Least?", hint: null },
+  { id: 284, text: "Do you have any superstitions?", hint: null },
+  { id: 285, text: "Is there any day of the year that you do something special — a celebration or tradition that isn't a holiday or birthday?", hint: null },
+  { id: 286, text: "Where and when do you most often daydream?", hint: null },
+  { id: 287, text: "Finish this sentence: There are very few people who are better than me at ___________.", hint: null },
+  { id: 288, text: "Have you ever quit anything significant?", hint: null },
+  { id: 289, text: "Finish this sentence: Sundays are for ___________.", hint: null },
+  { id: 290, text: "Is there any rule in professional sports that you are against?", hint: null },
+  { id: 291, text: "If money and time were no object, how many children would you have?", hint: null },
+  { id: 292, text: "Why did your parents name you the name you have?", hint: null },
+  { id: 293, text: "What is your family heritage?", hint: null },
+  { id: 294, text: "What is more important to you — landscaping or furniture?", hint: null },
+  { id: 295, text: "Do you have a favorite room in the house?", hint: null },
+  { id: 296, text: "Have you ever been asked to leave a public place? Why?", hint: null },
+  { id: 297, text: "If a major network offered to follow you around for 30 days to make a movie about your life, would you let them?", hint: "Assume you'd have full privacy. If not for free, how much would they have to pay you?" },
+  { id: 298, text: "Do you know anyone who has either gained or lost half or more of their adult body weight?", hint: null },
+  { id: 299, text: "How much would you be willing to pay per inch to be taller? How much per pound to be lighter — and the weight would stay off?", hint: null },
+  { id: 300, text: "Do you have any advice for anyone famous?", hint: null },
+  { id: 301, text: "Which would you rather do for four hours — clean your house or do yard work?", hint: null },
+  { id: 302, text: "What is the weirdest tradition or habit of your significant other?", hint: null },
+  { id: 303, followUp: 304, text: "If tomorrow morning you could wake up fluent in 4 additional languages or proficient in 4 additional instruments — which would you choose?", hint: null },
+  { id: 304, text: "What languages or instruments would they be?", hint: null },
+  { id: 305, text: "What was the last big fight you had (with anyone)?", hint: null },
+  { id: 306, text: "If you could have an amazing singing voice or be amazing at an instrument, which would you choose?", hint: null },
+  { id: 307, text: "Where is your favorite place to shop?", hint: null },
+  { id: 308, text: "What is the scariest, most daring thing you've ever done?", hint: null },
+  { id: 309, text: "I just gave you $500. Would you rather spend it in a clothing store, a hardware store, or a grocery store?", hint: null },
+  { id: 310, text: "If you could permanently add one person to your extended family, who would it be?", hint: null },
+  { id: 311, text: "What's your favorite TV show of all time?", hint: null },
+  { id: 312, text: "What's the dumbest thing you've ever done?", hint: null },
+  { id: 313, text: "Give a one-minute argument for one of your biggest pet peeves.", hint: null },
+  { id: 314, text: "To what brand are you stupidly loyal?", hint: null },
+  { id: 315, text: "How many different jobs have you held in your life?", hint: null },
+  { id: 316, text: "No one else is around. What do you gorge on?", hint: null },
+  { id: 317, text: "How many different addresses have you had in your life?", hint: null },
+  { id: 318, text: "What is (to you) your most appealing physical attribute?", hint: null },
+  { id: 319, text: "What percentage of all the clothes you own have you not worn in the past 12 months?", hint: null },
+  { id: 320, text: "Wave a magic wand and move this gathering to anyplace in the world where you have been. Where are we now?", hint: null },
+  { id: 321, text: "Who (that you know) seems to live the most idyllic life imaginable?", hint: null },
+  { id: 322, text: "If money is not an object: where do you want to retire?", hint: null },
+  { id: 323, text: "If you could be the personal assistant of anyone in the world, who would it be?", hint: null },
+  { id: 324, text: "What's the worst job you've ever held?", hint: null },
+  { id: 325, text: "What are your THREE most prized possessions?", hint: null },
+  { id: 326, text: "How many times in your life have you lost your wallet, keys, or phone and never found them?", hint: null },
+  { id: 327, text: "How would you design a spice rack for a blind person?", hint: null },
+  { id: 328, text: "What is your favorite religious song?", hint: null },
+  { id: 329, text: "What do you think happens to a person after they die?", hint: null },
+  { id: 330, text: "You just got kicked out of the United States. Where would you go?", hint: null },
+  { id: 331, text: "What is the longest grudge you've ever held? Over what?", hint: null },
+  { id: 332, text: "With whom do you speak on the phone the most (other than your significant other)?", hint: null },
+  { id: 333, text: "You can only have one meal for every meal for one month. What is it?", hint: null },
+  { id: 334, text: "What is your least favorite personal hygiene task?", hint: null },
+  { id: 335, text: "One piece of clothing that you once owned and you'd like to have back?", hint: null },
+  { id: 336, text: "Rattle off something long-ish that you have memorized.", hint: null },
+  { id: 337, text: "Have you read a book that you feel changed your life?", hint: null },
+  { id: 338, text: "Who was your favorite teacher in high school?", hint: null },
+  { id: 339, text: "For what reason were you most often punished or grounded?", hint: null },
+  { id: 340, text: "What is your favorite thing to do for another person?", hint: null },
+  { id: 341, text: "What is the luckiest break you've ever received in your career?", hint: null },
+  { id: 342, text: "What is the most generous act of kindness anyone has ever done for you?", hint: null },
+  { id: 343, text: "What's the family tradition that you will NEVER give up?", hint: null },
+  { id: 344, text: "What's the family tradition that you will NEVER maintain?", hint: null },
+  { id: 345, text: "Choose one dinner: Dinner at The Vatican, Buckingham Palace, or The White House?", hint: "Current or previous occupant of your choosing." },
+  { id: 346, text: "On a scale of 1 to 10, how difficult would it be for you to change a tire? (1 = easy)", hint: null },
+  { id: 347, text: "Who is your favorite pet of all time?", hint: null },
+  { id: 348, text: "If someone wrote a biography about you, what do you think the title should be?", hint: null },
+  { id: 349, text: "Have you ever saved anyone's life... or come close?", hint: null },
+  { id: 350, text: "You can have one hour each with FIVE people who are now dead. Who are they?", hint: "People you knew or didn't know — either one." },
+  { id: 351, text: "Do you own: a garlic press? A watch worth more than $1,000? A tire pressure gauge?", hint: null },
+  { id: 352, text: "How many professional sporting events do you attend in an average year?", hint: null },
+  { id: 353, text: "What's the first movie you ever remember seeing in a theater?", hint: null },
+  { id: 354, text: "Who is the most famous person you have ever met?", hint: null },
+  { id: 355, text: "What is the biggest difference between you now and you when you were half your current age?", hint: null },
+  { id: 356, text: "What one song would you love to have played at your funeral... but probably won't?", hint: null },
+  { id: 357, text: "What is the one food item you try really hard not to run out of at home?", hint: null },
+  { id: 358, text: "Approximately how many people do you know with your last name?", hint: null },
+  { id: 359, text: "Finish this sentence: I might just be the smartest person in the room when it comes to:", hint: null },
+  { id: 360, text: "What jobs have you quit?", hint: null },
+  { id: 361, text: "What place or location do you literally dream of most often?", hint: null },
+  { id: 362, text: "Pick one: Do you prefer getting up early or staying up late?", hint: null },
+  { id: 363, text: "You now have to drive one of the previous cars you've owned. Which is it?", hint: null },
+  { id: 364, text: "Name a friend with whom you've lost touch — and you'd like to reunite.", hint: null },
+  { id: 365, text: "Do you think a hotdog is a sandwich?", hint: null },
+  { id: 366, text: "What is your favorite thing to do on a Sunday afternoon?", hint: null },
+  { id: 367, text: "Have you ever been kicked out of a bar or restaurant?", hint: null },
+  { id: 368, text: "Name two drinks that at one time were your favorite. And what is it now?", hint: null },
+  { id: 369, text: "If someone from St. Louis asks you 'Where did you go to school?' and you were homeschooled, should you give your parent's home address?", hint: null },
+  { id: 370, text: "Do you have an all-time favorite actor? Performer?", hint: null },
+  { id: 371, text: "Have you ever written to the newspaper? Was it published?", hint: null },
+  { id: 372, text: "Have you ever had a terrible roommate?", hint: null },
+  { id: 373, text: "If you had to give up listening to music or reading (including books on tape) for a year — which?", hint: null },
+  { id: 374, text: "Have you spoken at a funeral?", hint: null },
+  { id: 375, text: "Do you know the color of your master bathroom wall?", hint: null },
+];
+
+// ── BONUS QUESTIONS ───────────────────────────────────────────────────────────
+export const BONUS_QUESTIONS = [
+  { id: "b1", text: "What is something you believed with total certainty as a child that turned out to be completely wrong?", hint: null, type: "bonus" },
+  { id: "b2", text: "If you could have dinner with any three people — living or dead — who aren't famous, who would they be?", hint: "The 'no famous people' rule makes this one interesting.", type: "bonus" },
+  { id: "b3", text: "What is the most spontaneous thing you have ever done?", hint: null, type: "bonus" },
+  { id: "b4", text: "Finish this sentence: The older I get, the more I appreciate ___________.", hint: null, type: "bonus" },
+  { id: "b5", text: "What is one thing you do differently than almost everyone you know?", hint: null, type: "bonus" },
+  { id: "b6", text: "If your life had a theme song — the one that plays when you walk into a room — what would it be?", hint: null, type: "bonus" },
+  { id: "b7", text: "What is the most embarrassing thing that has ever happened to you in public?", hint: null, type: "bonus" },
+  { id: "b8", text: "What is something you have never told your parents but wish you could?", hint: "If your parents are present, feel free to skip this one.", type: "bonus" },
+  { id: "b9", text: "Would you rather know the date of your death, or the cause?", hint: null, type: "bonus" },
+  { id: "b10", text: "What job would you be terrible at, even with years of training?", hint: null, type: "bonus" },
+  { id: "b11", text: "Finish this sentence: The one thing I will never understand about people is ___________.", hint: null, type: "bonus" },
+  { id: "b12", text: "What is the nicest thing a stranger has ever done for you?", hint: null, type: "bonus" },
+  { id: "b13", text: "If you could go back and relive one ordinary day — nothing special, just a regular day — which would it be and why?", hint: null, type: "bonus" },
+  { id: "b14", text: "What habit did you pick up from your parents that you swore you never would?", hint: null, type: "bonus" },
+  { id: "b15", text: "What is something you are surprisingly bad at given how long you've been doing it?", hint: null, type: "bonus" },
+  { id: "b16", text: "If you had to eat at the same restaurant every week for a year, which would it be?", hint: null, type: "bonus" },
+  { id: "b17", text: "What is the most useful thing you know how to do that most people don't?", hint: null, type: "bonus" },
+  { id: "b18", text: "Finish this sentence: The version of me from ten years ago would be surprised that I now ___________.", hint: null, type: "bonus" },
+  { id: "b19", text: "What would you do with a completely free, unscheduled Saturday — no obligations, no one else's needs?", hint: null, type: "bonus" },
+  { id: "b20", text: "What is something you have strong opinions about that most people don't care about at all?", hint: null, type: "bonus" },
+  { id: "b21", text: "If you had to describe your childhood in three words, what would they be?", hint: null, type: "bonus" },
+  { id: "b22", text: "What is the worst advice you have ever followed?", hint: null, type: "bonus" },
+  { id: "b23", text: "What is something you own that has no practical value but that you would never get rid of?", hint: null, type: "bonus" },
+  { id: "b24", text: "Would you rather be known as the funniest person in the room, or the smartest?", hint: null, type: "bonus" },
+  { id: "b25", text: "What is the most trouble you ever got into that your parents never found out about?", hint: null, type: "bonus" },
+  { id: "b26", text: "Where were you when the O.J. verdict was read? How about the White Bronco chase?", hint: null, type: "bonus", followUp: 11 },
+];
+
+export const DEFAULT_ABOUT = `These questions were written starting in 1997 by someone who got tired of small talk at dinner parties — the endless "where do you live, what do you do" loop that always ended in uncomfortable silence.
+
+The idea is simple: get to know the person, not their résumé. Find out what they feel, think, believe — and why.
+
+Two rules:
+
+Be sincere. Treat this as a real conversation, not a game show. You may be entertained, but don't miss out on a lifelong connection.
+
+Be impartial. Your job is to learn about the other person, not to judge their answers. Whatever the answer to whatever the question — it isn't a wrong answer. The antidote to judgment? Curiosity.
+
+Hit Skip if a question feels wrong for the moment — no explanation needed. Rate questions to surface the best ones over time.`;
+
+export const DEFAULT_INSTRUCTIONS = `How to Play
+
+The Questioner reads the question aloud to the group. One person is selected to answer — that person becomes the next Questioner.
+
+Multiplayer Mode (2–15 players)
+Everyone joins with their name. The app randomly selects who answers each round, making sure everyone gets a turn before anyone goes twice. The person who answers becomes the Questioner for the next round.
+
+Solo Mode
+Just one person asks the questions to the group. The questioner sets the pace and has discretion to skip.
+
+A few tips from the creator:
+— Make it light-hearted. You don't have to present this as a "game." Just say: "I heard a weird question the other day — curious how you'd answer it."
+— Don't rush. The questions are just conversation starters, not a quiz.
+— Skip freely. If a question feels wrong for the room, skip it. No explanation needed.
+— Be impartial. Don't react to answers — be curious about them instead.
+— The best questions often lead somewhere unexpected. Follow the conversation, not the app.`;
+
+// ── BEAR CAMP ────────────────────────────────────────────────────────────────
+// Preloaded questions for the 60th-birthday camping trip. These always live in
+// the Bear Camp deck; group-added questions (from Firebase "bearCampQuestions")
+// are merged in on top of these at runtime.
+export const BEAR_CAMP_SEED = [
+  { id: "bc1", text: "Recite your lower school Prize Day poem. Winner is the one who can recite the most.", hint: null, type: "bearcamp", author: "Bob" },
+  { id: "bc2", text: "Recite John Goebel's prize-winning Prize Day poem. (Excluding John — winner is whoever recites the most.)", hint: null, type: "bearcamp", author: "Bob" },
+  { id: "bc3", text: "How did it make you feel when one of your best friends refused to room with you in Vancouver because of your snoring?", hint: null, type: "bearcamp", author: "Bob" },
+  { id: "bc4", text: "Who snores the loudest?", hint: null, type: "bearcamp", author: "Bob" },
+  { id: "bc5", text: "Who among us has competed in the most high school state championship tournaments (team and individual)? Who has won the most State titles?", hint: null, type: "bearcamp", author: "Bob" },
+  { id: "bc6", text: "Should Bob Pommer be in the CDS golf hall of fame?", hint: null, type: "bearcamp", author: "Bob" },
+  { id: "bc7", text: "Identify the most unlikely teacher who had the greatest impact on you — and why?", hint: null, type: "bearcamp", author: "Bob" },
+  { id: "bc8", text: "What's the dumbest thing you did at Country Day that you got caught for? What's the dumbest thing you did at Country Day that you didn't get caught for?", hint: null, type: "bearcamp", author: "Bob" },
+  { id: "bc9", text: "List as many of the automobiles driven by each monger in high school.", hint: null, type: "bearcamp", author: "Bob" },
+  { id: "bc10", text: "Identify a streaming series (Netflix, Hulu, HBO, etc.) that Jim Breckenridge has watched more than once. Suggest where he should start.", hint: null, type: "bearcamp", author: "Bob" },
+  { id: "bc11", text: "Which monger has the oldest email address — and what is it?", hint: null, type: "bearcamp", author: "Bob" },
+  { id: "bc12", text: "How much money have we invested in the syndicate anyway?", hint: null, type: "bearcamp", author: "Bob" },
+];
