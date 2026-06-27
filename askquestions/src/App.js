@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { ref, onValue, set, get } from "firebase/database";
 import { db } from "./firebase";
-import { JEFF_QUESTIONS, BONUS_QUESTIONS, DEFAULT_ABOUT, DEFAULT_INSTRUCTIONS } from "./questions";
+import { JEFF_QUESTIONS, BONUS_QUESTIONS, BEAR_CAMP_SEED, DEFAULT_ABOUT, DEFAULT_INSTRUCTIONS } from "./questions";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -138,8 +138,14 @@ export default function App() {
   const [suggestText, setSuggestText] = useState("");
   const [suggestName, setSuggestName] = useState("");
   const [pendingSuggestions, setPendingSuggestions] = useState([]);
+  // Bear Camp
+  const [bearCampCustom, setBearCampCustom] = useState([]);
+  const [showBearCamp, setShowBearCamp] = useState(false);
+  const [bcText, setBcText] = useState("");
+  const [bcName, setBcName] = useState("");
 
   const allQ = [...JEFF_QUESTIONS, ...BONUS_QUESTIONS, ...customQuestions];
+  const bearCampQ = [...BEAR_CAMP_SEED, ...bearCampCustom];
 
   // ── Firebase listeners ────────────────────────────────────────────────────
   useEffect(() => {
@@ -154,6 +160,7 @@ export default function App() {
     listen("gameState", v => setGameState(v));
     listen("ratings", v => setRatings(v || {}));
     listen("customQuestions", v => setCustomQuestions(v ? Object.values(v) : []));
+    listen("bearCampQuestions", v => setBearCampCustom(v ? Object.values(v) : []));
     listen("pendingSuggestions", v => setPendingSuggestions(v ? Object.values(v).sort((a,b) => a.addedAt - b.addedAt) : []));
     listen("aboutText", v => { if (v) setAboutText(v); });
     listen("instructionsText", v => { if (v) setInstructionsText(v); });
@@ -284,13 +291,14 @@ export default function App() {
   };
 
   // ── Start / manage game ───────────────────────────────────────────────────
-  const startGame = async () => {
+  const startGame = async (bearCamp = false) => {
     if (players.length < 2) { showToast("Need at least 2 players!"); return; }
+    // A Bear Camp game always opens with a main-deck question, then alternates.
     const q = pickWeighted(allQ, null, ratings);
     const questioner = players[Math.floor(Math.random() * players.length)];
     const others = players.filter(p => p.id !== questioner.id);
     const answerer = others[Math.floor(Math.random() * others.length)];
-    const gs = { currentQ: q, questioner: questioner.id, answerer: answerer.id, round: 1, usedPlayerIds: [answerer.id] };
+    const gs = { currentQ: q, questioner: questioner.id, answerer: answerer.id, round: 1, usedPlayerIds: [answerer.id], bearCamp: !!bearCamp, qSource: "main" };
     await fbSet("gameState", gs);
     setScreen("game");
   };
@@ -299,8 +307,20 @@ export default function App() {
     if (!gameState) return;
     setFlipping(true);
     setTimeout(async () => {
-      const followUp = gameState.currentQ?.followUp ? findById(allQ, gameState.currentQ.followUp) : null;
-      const q = gameState.nextQ || followUp || pickWeighted(allQ, gameState.currentQ?.id, ratings);
+      // Pick the next question. In Bear Camp games we strictly alternate
+      // between the main deck and the Bear Camp deck. A suggested question
+      // (nextQ), if present, is honored without disturbing the alternation.
+      let q, nextSource = gameState.qSource || "main";
+      if (gameState.nextQ) {
+        q = gameState.nextQ;
+      } else if (gameState.bearCamp) {
+        nextSource = gameState.qSource === "main" ? "bear" : "main";
+        const pool = nextSource === "bear" ? bearCampQ : allQ;
+        q = pickWeighted(pool.length ? pool : allQ, gameState.currentQ?.id, ratings);
+      } else {
+        const followUp = gameState.currentQ?.followUp ? findById(allQ, gameState.currentQ.followUp) : null;
+        q = followUp || pickWeighted(allQ, gameState.currentQ?.id, ratings);
+      }
       const newQuestioner = players.find(p => p.id === gameState.answerer) || players[0];
       let used = gameState.usedPlayerIds || [];
       const eligible = players.filter(p => p.id !== newQuestioner.id && !used.includes(p.id));
@@ -313,7 +333,8 @@ export default function App() {
         questioner: newQuestioner.id, answerer: newAnswerer.id,
         round: (gameState.round || 1) + 1,
         usedPlayerIds: [...used, newAnswerer.id],
-        nextQ: null
+        nextQ: null,
+        qSource: nextSource
       };
       await fbSet("gameState", gs);
       setJustRated(false); setStarHover(0); setFlipping(false);
@@ -346,6 +367,18 @@ export default function App() {
     await fbSet(`players/${playerId}`, null);
     showToast("Player removed.");
   };
+
+  // ── Bear Camp ───────────────────────────────────────────────────────────────
+  const submitBearCampQuestion = async () => {
+    if (!bcText.trim()) return;
+    const id = `bc_${Date.now()}`;
+    const q = { id, text: bcText.trim(), hint: null, author: bcName.trim() || "Anonymous", type: "bearcamp", custom: true, addedAt: Date.now() };
+    await fbSet(`bearCampQuestions/${id}`, q);
+    setBcText(""); setBcName("");
+    showToast("Added to the Bear Camp deck!");
+  };
+
+  const deleteBearCampQ = async (id) => { await fbSet(`bearCampQuestions/${id}`, null); };
 
   // ── Admin ─────────────────────────────────────────────────────────────────
   const adminLogin = () => {
@@ -477,6 +510,7 @@ export default function App() {
         .q-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--gold); flex-shrink: 0; }
         .q-dot.ai { background: #5b9bd5; }
         .q-dot.comm { background: var(--burgundy); }
+        .q-dot.bear { background: #c8772e; }
         .q-src-lbl { font-size: .62rem; letter-spacing: .15em; text-transform: uppercase; color: var(--muted); }
         .q-text { font-family: 'Playfair Display', serif; font-size: clamp(1.2rem, 3.5vw, 1.7rem); font-weight: 400; line-height: 1.45; color: var(--cream); margin-bottom: 1.1rem; }
         .q-hint { background: rgba(201,146,58,.05); border-left: 2px solid rgba(201,146,58,.25); padding: .5rem .8rem; border-radius: 0 2px 2px 0; font-size: .78rem; color: var(--muted); font-style: italic; margin-bottom: 1rem; line-height: 1.5; }
@@ -551,6 +585,7 @@ export default function App() {
           <div className="hdr-nav">
             <button className="nav-btn" onClick={() => setShowInstructions(true)}>How to Play</button>
             <button className="nav-btn" onClick={() => setShowAbout(true)}>About</button>
+            <button className="nav-btn" style={{borderColor:"rgba(200,119,46,.5)",color:"#cf9a5c"}} onClick={() => setShowBearCamp(true)}>🐻 Bear Camp</button>
             {(screen === "lobby" || screen === "game" || screen === "solo") && (
               <button className="nav-btn" onClick={() => { setShowAdmin(true); setAdminAuthed(false); setAdminPw(""); setAdminError(""); }}>Admin</button>
             )}
@@ -602,8 +637,8 @@ export default function App() {
             <div className={`q-card ${flipping ? "flip" : ""}`}>
               <span className="q-num">#{soloQ.id}</span>
               <div className="q-source">
-                <div className={`q-dot ${soloQ.type === "ai" ? "ai" : soloQ.type === "community" ? "comm" : ""}`} />
-                <span className="q-src-lbl">{soloQ.type === "ai" ? "AI Generated" : soloQ.author ? `Added by ${soloQ.author}` : "Jeff's Original"}{soloQ.followUp ? " · Part 1 of 2" : ""}</span>
+                <div className={`q-dot ${soloQ.type === "bearcamp" ? "bear" : soloQ.type === "ai" ? "ai" : soloQ.type === "community" ? "comm" : ""}`} />
+                <span className="q-src-lbl">{soloQ.type === "bearcamp" ? (soloQ.author ? `🐻 Bear Camp · ${soloQ.author}` : "🐻 Bear Camp") : soloQ.type === "ai" ? "AI Generated" : soloQ.author ? `Added by ${soloQ.author}` : "Jeff's Original"}{soloQ.followUp ? " · Part 1 of 2" : ""}</span>
               </div>
               <p className="q-text">{soloQ.text}</p>
               {soloQ.hint && <div className="q-hint">💡 {soloQ.hint}</div>}
@@ -651,7 +686,11 @@ export default function App() {
               {players.length < 2 && <p style={{ fontSize: ".78rem", color: "var(--muted)", fontStyle: "italic", marginBottom: "1rem" }}>Waiting for at least 2 players…</p>}
               {isHost ? (<>
                 <p style={{ fontSize: ".73rem", color: "var(--muted)", fontStyle: "italic", marginBottom: ".8rem" }}>As the first player, you start the game when everyone is ready.</p>
-                <button className="btn-gold" onClick={startGame} disabled={players.length < 2} style={{ width: "auto" }}>Start Game →</button>
+                <div style={{ display: "flex", gap: ".7rem", flexWrap: "wrap", alignItems: "center" }}>
+                  <button className="btn-gold" onClick={() => startGame(false)} disabled={players.length < 2} style={{ width: "auto" }}>Start Game →</button>
+                  <button className="btn-green" onClick={() => startGame(true)} disabled={players.length < 2} style={{ width: "auto" }}>🐻 Start Bear Camp Game →</button>
+                </div>
+                <p style={{ fontSize: ".7rem", color: "var(--muted)", fontStyle: "italic", marginTop: ".7rem" }}>Bear Camp alternates one question from the main deck, then one from the Bear Camp deck — back and forth all night.</p>
               </>) : (
                 <p style={{ fontSize: ".8rem", color: "var(--muted)", fontStyle: "italic" }}>Waiting for {players[0]?.name || "the host"} to start…</p>
               )}
@@ -662,6 +701,11 @@ export default function App() {
         {/* GAME */}
         {screen === "game" && gameState && (
           <div className="game-wrap">
+            {gameState.bearCamp && (
+              <div style={{ textAlign: "center", marginBottom: ".9rem" }}>
+                <span className="solo-badge" style={{ background: "rgba(200,119,46,.15)", borderColor: "rgba(200,119,46,.35)", color: "#cf9a5c", marginBottom: 0 }}>🐻 Bear Camp · alternating decks</span>
+              </div>
+            )}
             <div className="ticker">
               {players.map(p => (
                 <div key={p.id} style={{display:"inline-flex",alignItems:"center",gap:".2rem"}}>
@@ -694,8 +738,8 @@ export default function App() {
               <div className={`q-card ${flipping ? "flip" : ""}`}>
                 <span className="q-num">#{currentQ.id}</span>
                 <div className="q-source">
-                  <div className={`q-dot ${currentQ.type === "ai" ? "ai" : currentQ.type === "community" ? "comm" : ""}`} />
-                  <span className="q-src-lbl">{currentQ.type === "ai" ? "AI Generated" : currentQ.author ? `Added by ${currentQ.author}` : "Jeff's Original"}{currentQ.followUp ? " · Part 1 of 2" : ""}</span>
+                  <div className={`q-dot ${currentQ.type === "bearcamp" ? "bear" : currentQ.type === "ai" ? "ai" : currentQ.type === "community" ? "comm" : ""}`} />
+                  <span className="q-src-lbl">{currentQ.type === "bearcamp" ? (currentQ.author ? `🐻 Bear Camp · ${currentQ.author}` : "🐻 Bear Camp") : currentQ.type === "ai" ? "AI Generated" : currentQ.author ? `Added by ${currentQ.author}` : "Jeff's Original"}{currentQ.followUp ? " · Part 1 of 2" : ""}</span>
                 </div>
                 <p className="q-text">{currentQ.text}</p>
                 {currentQ.hint && <div className="q-hint">💡 {currentQ.hint}</div>}
@@ -748,6 +792,39 @@ export default function App() {
           </div>
         )}
 
+        {/* BEAR CAMP MODAL */}
+        {showBearCamp && (
+          <div className="overlay" onClick={e => e.target === e.currentTarget && setShowBearCamp(false)}>
+            <div className="modal">
+              <button className="modal-close" onClick={() => setShowBearCamp(false)}>✕</button>
+              <h2 className="modal-title">🐻 Bear Camp</h2>
+              <p style={{fontSize:".82rem",color:"var(--parchment)",marginBottom:"1rem",lineHeight:1.7}}>Questions made for the trip. Add your own below — they'll be waiting in the Bear Camp deck for everyone. When the host starts a <em>Bear Camp game</em>, the app alternates one question from the main Ask Questions! deck and one from this Bear Camp deck, all night long.</p>
+
+              <div style={{ background: "rgba(200,119,46,.06)", border: "1px solid rgba(200,119,46,.18)", borderRadius: "3px", padding: "1rem", marginBottom: "1.2rem" }}>
+                <div style={{marginBottom:".7rem"}}>
+                  <label className="form-lbl">Your Bear Camp Question *</label>
+                  <textarea className="form-textarea" style={{minHeight:"70px"}} value={bcText} onChange={e => setBcText(e.target.value)} placeholder="Ask something only this crew would understand…" />
+                </div>
+                <div style={{marginBottom:".9rem"}}>
+                  <label className="form-lbl">Your Name</label>
+                  <input className="form-input" value={bcName} onChange={e => setBcName(e.target.value)} placeholder="e.g. Jim" onKeyDown={e => e.key === "Enter" && submitBearCampQuestion()} />
+                </div>
+                <button className="btn-green btn-sm" onClick={submitBearCampQuestion} disabled={!bcText.trim()}>Add to Bear Camp Deck →</button>
+              </div>
+
+              <p className="sec-title">Bear Camp Deck ({bearCampQ.length})</p>
+              {bearCampQ.map(q => (
+                <div key={q.id} className="q-row">
+                  <div style={{ flex: 1 }}>
+                    <p className="q-row-text">{q.text}</p>
+                    <p className="q-row-meta">{q.author ? `Added by ${q.author}` : "Preloaded"}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* HOW TO PLAY MODAL */}
         {showInstructions && (
           <div className="overlay" onClick={e => e.target === e.currentTarget && setShowInstructions(false)}>
@@ -789,7 +866,7 @@ export default function App() {
                 </div>
               ) : (<>
                 <div className="tab-bar">
-                  {[["instructions","How to Play"],["about","About"],["questions","Questions"],["bonus","Bonus Q's"],["stats","Insights"],["settings","Settings"]].map(([key, label]) => (
+                  {[["instructions","How to Play"],["about","About"],["questions","Questions"],["bearcamp","🐻 Bear Camp"],["bonus","Bonus Q's"],["stats","Insights"],["settings","Settings"]].map(([key, label]) => (
                     <button key={key} className={`tab ${adminTab === key ? "on" : ""}`} onClick={() => setAdminTab(key)}>{label}</button>
                   ))}
                 </div>
@@ -845,6 +922,27 @@ export default function App() {
                       <div key={q.id} className="q-row">
                         <div style={{ flex: 1 }}><p className="q-row-text">{q.text}</p><p className="q-row-meta">by {q.author}{getAvgRating(q.id) ? ` · ${getAvgRating(q.id)} ★` : " · unrated"}</p></div>
                         <div style={{ display: "flex", gap: ".3rem" }}><button className="icon-btn" onClick={() => setEditQ({ ...q })}>✎</button><button className="icon-btn del" onClick={() => deleteCustomQ(q.id)}>✕</button></div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {adminTab === "bearcamp" && (
+                  <div>
+                    <p className="sec-title">Bear Camp Deck ({bearCampQ.length})</p>
+                    <p className="ai-note">{BEAR_CAMP_SEED.length} preloaded questions plus anything the crew adds. During a Bear Camp game the app alternates one main-deck question and one Bear Camp question. Anyone can add via the 🐻 Bear Camp button; preloaded questions can't be removed, but added ones can.</p>
+                    <div style={{ background: "rgba(200,119,46,.06)", border: "1px solid rgba(200,119,46,.18)", borderRadius: "3px", padding: "1rem", marginBottom: "1rem" }}>
+                      <div style={{ marginBottom: ".7rem" }}><label className="form-lbl">Question *</label><textarea className="form-textarea" style={{ minHeight: "60px" }} value={bcText} onChange={e => setBcText(e.target.value)} placeholder="Add a Bear Camp question…" /></div>
+                      <div style={{ marginBottom: ".9rem" }}><label className="form-lbl">Author</label><input className="form-input" value={bcName} onChange={e => setBcName(e.target.value)} placeholder="e.g. Jim" /></div>
+                      <button className="btn-green btn-sm" onClick={submitBearCampQuestion} disabled={!bcText.trim()}>Add</button>
+                    </div>
+                    {bearCampQ.map(q => (
+                      <div key={q.id} className="q-row">
+                        <div style={{ flex: 1 }}>
+                          <p className="q-row-text">{q.text}</p>
+                          <p className="q-row-meta">{q.author ? `by ${q.author}` : "preloaded"}{q.custom ? "" : " · seed"}</p>
+                        </div>
+                        {q.custom && <button className="icon-btn del" onClick={() => { if (window.confirm("Remove this Bear Camp question?")) deleteBearCampQ(q.id); }}>✕</button>}
                       </div>
                     ))}
                   </div>
