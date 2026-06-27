@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+  <radialGradient id="sky" cx="50%" cy="80%" r="90%">
+    <stop offset="0%" stop-color="#d4852a"/><stop offset="20%" stop-color="#9a5f33"/>
+    <stop offset="50%" stop-color="#3a3a52"/><stop offset="100%" stop-color="#15192c"/>
+  </radialGradient>
+  <linearGradient id="lake" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0%" stop-color="#caa24e"/><stop offset="14%" stop-color="#3f5b5e"/><stop offset="100%" stop-color="#15242a"/>
+  </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="70%" r="60%">
+      <stop offset="0%" stop-color="#d4852a" stop-opacity="0.28"/><stop offset="100%" stop-color="#d4852a" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="scrim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0c0a06" stop-opacity="0.0"/><stop offset="100%" stop-color="#0c0a06" stop-opacity="0.78"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#sky)"/>
+  <circle cx="80" cy="80" r="1.6" fill="#f5f0e8" opacity="0.706"/><circle cx="180" cy="50" r="1.1" fill="#f5f0e8" opacity="0.626"/><circle cx="300" cy="110" r="1.2" fill="#f5f0e8" opacity="0.642"/><circle cx="470" cy="70" r="1.5" fill="#f5f0e8" opacity="0.69"/><circle cx="560" cy="130" r="1" fill="#f5f0e8" opacity="0.61"/><circle cx="700" cy="60" r="1.3" fill="#f5f0e8" opacity="0.658"/><circle cx="840" cy="110" r="1.1" fill="#f5f0e8" opacity="0.626"/><circle cx="980" cy="70" r="1.6" fill="#f5f0e8" opacity="0.706"/><circle cx="1080" cy="120" r="1.1" fill="#f5f0e8" opacity="0.626"/><circle cx="1140" cy="60" r="1.3" fill="#f5f0e8" opacity="0.658"/><circle cx="400" cy="150" r="0.9" fill="#f5f0e8" opacity="0.5940000000000001"/><circle cx="900" cy="160" r="0.9" fill="#f5f0e8" opacity="0.5940000000000001"/>
+  <circle cx="995" cy="120" r="40" fill="#f3e6c4" opacity="0.95"/>
+          <circle cx="981.4" cy="112" r="40" fill="#23263e"/>
+  <rect width="1200" height="630" fill="url(#glow)"/>
+  <path d="M0,360 L120,250 L230,320 L360,210 L500,310 L640,225 L780,320 L920,235 L1060,315 L1200,250 L1200,460 L0,460 Z" fill="#33405a"/>
+  <path d="M0,400 L150,320 L300,388 L470,300 L640,392 L820,310 L980,395 L1140,322 L1200,360 L1200,470 L0,470 Z" fill="#1f2a3a"/>
+  <rect x="0" y="458" width="1200" height="180" fill="url(#lake)"/>
+  <rect x="560" y="460" width="70" height="170" fill="#e8c068" opacity="0.10"/>
+  <path d="M42,470 L70,443.1666666666667 L98,470 Z" fill="#11201a"/><path d="M51.33333333333333,446.6666666666667 L70,419.8333333333333 L88.66666666666667,446.6666666666667 Z" fill="#11201a"/><path d="M60.666666666666664,423.3333333333333 L70,396.5 L79.33333333333333,423.3333333333333 Z" fill="#11201a"/><rect x="67.76" y="470" width="4.48" height="8.4" fill="#11201a"/><path d="M119,474 L140,454.06666666666666 L161,474 Z" fill="#11201a"/><path d="M126,456.6666666666667 L140,436.73333333333335 L154,456.6666666666667 Z" fill="#11201a"/><path d="M133,439.3333333333333 L140,419.4 L147,439.3333333333333 Z" fill="#11201a"/><rect x="138.32" y="474" width="3.36" height="6.24" fill="#11201a"/><path d="M1150,470 L1180,440.8666666666667 L1210,470 Z" fill="#11201a"/><path d="M1160,444.6666666666667 L1180,415.5333333333333 L1200,444.6666666666667 Z" fill="#11201a"/><path d="M1170,419.3333333333333 L1180,390.2 L1190,419.3333333333333 Z" fill="#11201a"/><rect x="1177.6" y="470" width="4.8" height="9.12" fill="#11201a"/><path d="M1088,476 L1110,455.3 L1132,476 Z" fill="#11201a"/><path d="M1095.3333333333333,458 L1110,437.3 L1124.6666666666667,458 Z" fill="#11201a"/><path d="M1102.6666666666667,440 L1110,419.3 L1117.3333333333333,440 Z" fill="#11201a"/><rect x="1108.24" y="476" width="3.52" height="6.4799999999999995" fill="#11201a"/><path d="M1033,478 L1050,462.6666666666667 L1067,478 Z" fill="#11201a"/><path d="M1038.6666666666667,464.6666666666667 L1050,449.3333333333333 L1061.3333333333333,464.6666666666667 Z" fill="#11201a"/><path d="M1044.3333333333333,451.3333333333333 L1050,436 L1055.6666666666667,451.3333333333333 Z" fill="#11201a"/><rect x="1048.64" y="478" width="2.72" height="4.8" fill="#11201a"/>
+  <rect width="1200" height="630" fill="url(#scrim)"/>
+  <text x="600" y="558" font-family="DejaVu Serif" font-weight="bold" font-size="78" text-anchor="middle" fill="#f5f0e8"><tspan font-style="italic" fill="#e8c068">Ask</tspan> Questions!</text>
+  <text x="600" y="600" font-family="DejaVu Serif" font-style="italic" font-size="27" letter-spacing="2" fill="#cf9a5c" text-anchor="middle">Bear Camp Edition &#183; Chilko Lake, British Columbia</text>
+  <text x="40" y="56" font-family="DejaVu Serif" font-size="24" letter-spacing="3" fill="#cf9a5c" opacity="0.85">&#127757; BEAR CAMP</text>
+  <text x="1160" y="56" font-family="DejaVu Serif" font-size="22" letter-spacing="1" fill="#cf9a5c" opacity="0.8" text-anchor="end">askquestionsapp.com</text>
+</svg>
